@@ -9,12 +9,17 @@
 
 #include "sysinfo.h"
 #include "cpu_features.h"
+#include "vb_threads.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 static int read_line_file(const char *path, char *out, size_t n)
 {
@@ -157,6 +162,19 @@ static void collect_os(vb_sysinfo *si)
     if (uname(&u) == 0)
         snprintf(si->kernel, sizeof si->kernel, "%s %s", u.sysname, u.release);
 
+#if defined(__APPLE__)
+
+    /* There is no /etc/os-release. kern.osproductversion is the product
+       version a user would recognise -- "15.6" -- as distinct from the Darwin
+       release already captured above as the kernel. */
+    char ver[64];
+    size_t vlen = sizeof ver;
+    if (sysctlbyname("kern.osproductversion", ver, &vlen, NULL, 0) == 0)
+        snprintf(si->os, sizeof si->os, "macOS %s", ver);
+    return;
+
+#else
+
     FILE *f = fopen("/etc/os-release", "r");
     if (f) {
         char line[256];
@@ -172,6 +190,8 @@ static void collect_os(vb_sysinfo *si)
         }
         fclose(f);
     }
+
+#endif
 }
 
 static void collect_compiler(vb_sysinfo *si)
@@ -300,10 +320,32 @@ void vb_sysinfo_collect(vb_sysinfo *si)
     snprintf(si->cpu_brand, sizeof si->cpu_brand, "%s", vb_cpu_brand());
     si->cpus_online = (int) sysconf(_SC_NPROCESSORS_ONLN);
 
+#if defined(__APPLE__)
+
+    /* No /sys smt/active to read. Comparing logical to physical cores answers
+       the same question, and answers it as 0 on Apple silicon (which has no
+       SMT) rather than leaving the field unknown, which the warning logic
+       would then have to skip. */
+    {
+        int phys = 0, logical = 0;
+        size_t plen = sizeof phys, llen = sizeof logical;
+        si->smt_active =
+            (sysctlbyname("hw.physicalcpu", &phys, &plen, NULL, 0) == 0 &&
+             sysctlbyname("hw.logicalcpu", &logical, &llen, NULL, 0) == 0 &&
+             phys > 0)
+            ? (logical > phys) : -1;
+    }
+
+#else
+
     char smt[8];
     si->smt_active = read_line_file("/sys/devices/system/cpu/smt/active",
                                     smt, sizeof smt)
                    ? atoi(smt) : -1;
+
+#endif
+
+    si->can_pin = vb_thread_pin_supported();
 
     si->loadavg1 = -1.0;
     {
@@ -366,6 +408,12 @@ const char *vb_sysinfo_warnings(const vb_sysinfo *si)
     if (si->smt_active == 1) {
         snprintf(buf + strlen(buf), sizeof buf - strlen(buf),
                  "SMT is enabled, which increases run-to-run variance; ");
+    }
+
+    if (!si->can_pin) {
+        snprintf(buf + strlen(buf), sizeof buf - strlen(buf),
+                 "this platform has no thread affinity API, so workers run "
+                 "unpinned and dispersion is wider than a pinned run; ");
     }
 
     /*
