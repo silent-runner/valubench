@@ -468,11 +468,14 @@ check-pinning: $(BUILD)/valubench
 	          2>/dev/null); \
 	   got=$$(printf '%s' "$$out" | python3 -c \
 	     'import json,sys; e=json.load(sys.stdin)["environment"]; \
-print(e["threads_used"], e["pinned_cpus"])' 2>/dev/null); \
+print(e["threads_used"], e["pinned_cpus"], int(e.get("can_pin", True)))' 2>/dev/null); \
 	   used=$$(echo "$$got" | cut -d" " -f1); \
 	   cpus=$$(echo "$$got" | cut -d" " -f2); \
+	   canpin=$$(echo "$$got" | cut -d" " -f3); \
 	   if [ -z "$$cpus" ]; then \
 	     echo "  FAIL  pinning       no pinned_cpus in the result"; exit 1; \
+	   elif [ "$$canpin" = 0 ]; then \
+	     echo "  skip  pinning       (no thread affinity API on this platform)"; \
 	   elif [ "$$cpus" -lt 2 ]; then \
 	     echo "  FAIL  pinning       $$used threads pinned onto $$cpus cpu"; exit 1; \
 	   else \
