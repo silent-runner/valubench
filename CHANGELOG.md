@@ -3,7 +3,7 @@
 Notable changes. Measured figures are not recorded here; they are tracked
 outside this repository while a durable format for them is decided.
 
-## Unreleased
+## 0.7.0 — 2026-09-09
 
 ### Fixed
 
