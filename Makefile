@@ -401,7 +401,12 @@ check-kernels: $(BUILD)/test_kernels
 # Strip any -NN version suffix first: gcc-15 and clang-20 are ordinary
 # spellings and the old pattern matched neither, so OBJDUMP became the
 # compiler itself and the scalar-purity guard silently found no kernels.
-OBJDUMP ?= $(shell echo $(CC) | sed 's/-[0-9][0-9]*$$//; s/g\?cc$$/objdump/; s/clang/objdump/')
+#
+# sed -E because \? is a GNU extension that BSD sed (and thus macOS) takes
+# literally, which reproduced that same failure for a different reason: plain
+# `cc` went through unchanged and the guard was handed the compiler to
+# disassemble with. ERE spells the optional `g` portably.
+OBJDUMP ?= $(shell echo $(CC) | sed -E 's/-[0-9]+$$//; s/g?cc$$/objdump/; s/clang/objdump/')
 
 check-scalar: $(BUILD)/kernel_scalar.o
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)

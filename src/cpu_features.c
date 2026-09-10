@@ -135,7 +135,33 @@ unsigned vb_sve_lanes64(void) { return 0; }
 #elif defined(__aarch64__)
 
 #include <stdio.h>
+
+#if defined(__APPLE__)
+
+/*
+ * Darwin has no auxiliary vector. The hw.optional sysctls answer the same
+ * question getauxval(AT_HWCAP) does -- what the OS has enabled, not merely
+ * what the silicon implements -- so this stays a real query rather than a
+ * hardcoded answer.
+ */
+#include <sys/sysctl.h>
+
+static int darwin_hw_optional(const char *name, int if_absent)
+{
+    int val = 0;
+    size_t len = sizeof val;
+
+    /* An absent key means this kernel has never heard of the feature, which is
+       not the same as the feature being off; the caller says which answer that
+       should produce. */
+    if (sysctlbyname(name, &val, &len, NULL, 0) != 0)
+        return if_absent;
+    return val != 0;
+}
+
+#else
 #include <sys/auxv.h>
+#endif
 
 int vb_cpu_has_sse2(void)     { return 0; }
 int vb_cpu_has_avx2(void)     { return 0; }
@@ -158,7 +184,9 @@ int vb_cpu_has_sha_ni(void)   { return 0; }
  */
 int vb_cpu_has_neon(void)
 {
-#ifdef HWCAP_ASIMD
+#if defined(__APPLE__)
+    return darwin_hw_optional("hw.optional.neon", 1);
+#elif defined(HWCAP_ASIMD)
     return (getauxval(AT_HWCAP) & HWCAP_ASIMD) != 0;
 #else
     return 1;
@@ -177,7 +205,13 @@ int vb_cpu_has_neon(void)
  */
 int vb_cpu_has_sve(void)
 {
-#if defined(HWCAP_SVE) && VB_HAVE_SVE
+#if !VB_HAVE_SVE
+    return 0;
+#elif defined(__APPLE__)
+    /* Apple silicon has no SVE through M4, but the toolchain compiles the
+       kernels anyway, so this gate is what keeps them from being selected. */
+    return darwin_hw_optional("hw.optional.arm.FEAT_SVE", 0);
+#elif defined(HWCAP_SVE)
     return (getauxval(AT_HWCAP) & HWCAP_SVE) != 0;
 #else
     return 0;
@@ -186,7 +220,13 @@ int vb_cpu_has_sve(void)
 
 int vb_cpu_has_sve2(void)
 {
-#if defined(HWCAP2_SVE2) && VB_HAVE_SVE2
+#if !VB_HAVE_SVE2
+    return 0;
+#elif defined(__APPLE__)
+    /* FEAT_SVE2 implies FEAT_SVE, and Apple silicon has neither through M4;
+       the sysctl keeps this a real query rather than a hardcoded 0. */
+    return darwin_hw_optional("hw.optional.arm.FEAT_SVE2", 0);
+#elif defined(HWCAP2_SVE2)
     /* FEAT_SVE2 implies FEAT_SVE, so requiring both changes nothing on real
        silicon -- but the pair is not always reported consistently. qemu's
        `-cpu max,sve=off` clears HWCAP_SVE and leaves HWCAP2_SVE2 set, and
@@ -214,6 +254,18 @@ const char *vb_cpu_brand(void)
     if (done)
         return brand[0] ? brand : "unknown";
     done = 1;
+
+#if defined(__APPLE__)
+
+    /* Darwin publishes the marketing name directly -- "Apple M4 Pro" -- which
+       is the one thing /proc/cpuinfo cannot supply on most ARM parts. */
+    size_t len = sizeof brand;
+    if (sysctlbyname("machdep.cpu.brand_string", brand, &len, NULL, 0) != 0)
+        brand[0] = '\0';
+
+    return brand[0] ? brand : "unknown";
+
+#else
 
     FILE *f = fopen("/proc/cpuinfo", "r");
     if (!f)
@@ -247,6 +299,8 @@ const char *vb_cpu_brand(void)
     fclose(f);
 
     return brand[0] ? brand : "unknown";
+
+#endif
 }
 
 #else  /* neither x86 nor AArch64 */
