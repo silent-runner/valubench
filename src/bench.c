@@ -71,9 +71,9 @@
 #include "valubench.h"
 #include "opencl_backend.h"
 #include "power.h"
+#include "vb_threads.h"
 
 #include <pthread.h>
-#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -163,18 +163,18 @@ unsigned vb_allowed_cpus(int *out, unsigned max)
         return 0;
 
     if (!have_cache) {
-        cpu_set_t set;
         unsigned n = 0;
+        int n_read = vb_self_cpu_mask(cached, VB_MAX_THREADS);
 
-        if (sched_getaffinity(0, sizeof set, &set) != 0) {
+        if (n_read < 0) {
+            /* No affinity notion here, or the mask could not be read: fall
+               back to the online set, which is the old behaviour and no
+               worse than it. */
             unsigned online = vb_online_cpus();
             for (unsigned i = 0; i < online && n < VB_MAX_THREADS; i++)
                 cached[n++] = (int) i;
         } else {
-            for (unsigned cpu = 0; cpu < CPU_SETSIZE && n < VB_MAX_THREADS; cpu++)
-                if (CPU_ISSET(cpu, &set))
-                    cached[n++] = (int) cpu;
-
+            n = (unsigned) n_read;
             if (n == 0)               /* an empty mask should not happen */
                 cached[n++] = 0;
         }
@@ -272,22 +272,20 @@ struct vb_pool {
        run that could not pin is not the run that was asked for. */
     int               pin_failed;
     unsigned          pinned_cpus;   /* distinct CPUs the workers were pinned to */
-    pthread_barrier_t start_bar;
-    pthread_barrier_t done_bar;
+    vb_barrier        start_bar;
+    vb_barrier        done_bar;
 };
 
 /* Returns 0 on success, -1 if the CPU was refused. A refusal must be visible:
-   a run that says it pinned and did not is a different measurement. */
+   a run that says it pinned and did not is a different measurement. Where the
+   platform has no affinity API vb_thread_pin() is a no-op that returns 0 and
+   vb_thread_pin_supported() reports the absence; see pinned_cpus below. */
 static int pin_self(int cpu)
 {
     if (cpu < 0)
         return 0;
 
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET((unsigned) cpu, &set);
-    return pthread_setaffinity_np(pthread_self(), sizeof set, &set) == 0
-           ? 0 : -1;
+    return vb_thread_pin(cpu);
 }
 
 /* Hash this worker's slice `reps` times, verifying its own partial checksum. */
@@ -351,13 +349,13 @@ static void *worker_main(void *arg)
     worker_reference(w);
 
     for (;;) {
-        pthread_barrier_wait(&p->start_bar);
+        vb_barrier_wait(&p->start_bar);
 
         if (p->stop)
             break;
 
         run_slice(p, w);
-        pthread_barrier_wait(&p->done_bar);
+        vb_barrier_wait(&p->done_bar);
     }
 
     return NULL;
@@ -369,13 +367,13 @@ static void pool_destroy(vb_pool *p)
         return;
 
     p->stop = 1;
-    pthread_barrier_wait(&p->start_bar);
+    vb_barrier_wait(&p->start_bar);
 
     for (unsigned i = 1; i < p->n; i++)
         pthread_join(p->w[i].tid, NULL);
 
-    pthread_barrier_destroy(&p->start_bar);
-    pthread_barrier_destroy(&p->done_bar);
+    vb_barrier_destroy(&p->start_bar);
+    vb_barrier_destroy(&p->done_bar);
     pthread_cond_destroy(&p->gate_cv);
     pthread_mutex_destroy(&p->gate_m);
     free(p->w);
@@ -453,8 +451,14 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
      * for. The result was 2.9x slow on four cores, verified, and carried no
      * warning, because pinning to a CPU you already occupy always succeeds.
      * threads_used=8 with pinned_cpus=1 now says so on the face of the result.
+     *
+     * Only counted where the platform can actually pin. Without an affinity
+     * API vb_thread_pin() is a no-op, so every worker "succeeds" onto its
+     * nominal CPU and this loop would report a full spread that never
+     * happened; pinned_cpus stays 0 -- its documented "unpinned" value -- and
+     * the environment capture's can_pin warning explains why.
      */
-    if (cfg->pin_cpu) {
+    if (cfg->pin_cpu && vb_thread_pin_supported()) {
         for (unsigned i = 0; i < threads; i++) {
             unsigned j = 0;
             while (j < i && p->w[j].cpu != p->w[i].cpu)
@@ -470,8 +474,8 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     pthread_cond_init(&p->gate_cv, NULL);
     p->gate = 0;
 
-    pthread_barrier_init(&p->start_bar, NULL, threads);
-    pthread_barrier_init(&p->done_bar, NULL, threads);
+    vb_barrier_init(&p->start_bar, threads);
+    vb_barrier_init(&p->done_bar, threads);
 
     if (pin_self(p->w[0].cpu) != 0)
         p->pin_failed = 1;
@@ -509,8 +513,8 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     if (short_by) {
         for (unsigned i = 1; i < live; i++)
             pthread_join(p->w[i].tid, NULL);
-        pthread_barrier_destroy(&p->start_bar);
-        pthread_barrier_destroy(&p->done_bar);
+        vb_barrier_destroy(&p->start_bar);
+        vb_barrier_destroy(&p->done_bar);
         pthread_cond_destroy(&p->gate_cv);
         pthread_mutex_destroy(&p->gate_m);
         free(p->w);
@@ -534,9 +538,9 @@ static uint64_t pool_run(vb_pool *p, uint64_t reps, int *ok)
     p->reps = reps;
 
     uint64_t t0 = vb_now_ns();
-    pthread_barrier_wait(&p->start_bar);
+    vb_barrier_wait(&p->start_bar);
     run_slice(p, &p->w[0]);          /* the driver is worker 0 */
-    pthread_barrier_wait(&p->done_bar);
+    vb_barrier_wait(&p->done_bar);
     uint64_t elapsed = vb_now_ns() - t0;
 
     *ok = 1;
