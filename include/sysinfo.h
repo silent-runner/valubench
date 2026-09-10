@@ -43,6 +43,17 @@ typedef struct {
     int  has_neon, has_sve, has_sve2;
 
     /*
+     * Whether worker threads could be pinned to cores on this platform at all.
+     * Distinct from bench's pin_failed, which means a pin was attempted and
+     * refused: 0 here means there is no affinity API to attempt, so workers
+     * run unpinned and the scheduler is free to migrate them mid-sample, which
+     * widens dispersion. A reader comparing two runs needs to know which had
+     * pinning available, so the capture says so rather than leaving a run that
+     * could not pin looking merely noisy.
+     */
+    int  can_pin;
+
+    /*
      * Whether this is a virtual machine. Three states rather than a flag,
      * because on AArch64 there is frequently no way to tell: the x86
      * hypervisor CPUID bit has no equivalent, so its absence there is not
