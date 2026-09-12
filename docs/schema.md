@@ -37,7 +37,7 @@ The version number moves when a field is removed or its meaning changes.
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
 | `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `concurrent_work_items` and `waves_per_sweep`, `kernel_busy_fraction`, `transfer_mode` (`resident`, `stream` or `overlap`), with `overlap` also `pipeline_chunks` (the count used) and `overlap_efficiency`, in either streaming mode `host_memory` and the per-pass transfer figures, and where NVML answers `gpu_clock_mhz` (`first`, `last`, `min`, `max` SM clock over the timed samples, and `samples`), `gpu_temp_c` and `gpu_throttle_reasons` |
-| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
+| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `can_pin`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the figures: `cpu_package_joules`/`watts`, `gpu_joules`/`watts`, `hashing_joules`/`watts` and `hashes_per_joule` (or `hashing_unmeasured`), `machine_joules` and `hashes_per_joule_machine`, and `sources`, each with `counted` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
 
@@ -96,6 +96,13 @@ A clock that fell more than 5%, or a package that warmed more than 10 C, raises
 a warning. `-1` means the reading was not available; `temp_source` names the
 sensor believed, and only CPU or package zones are — an ambient reading dressed
 as a core temperature would be worse than none.
+
+**`environment.can_pin`** — whether this platform has a thread-affinity API at
+all. It separates two states that `pinned_cpus: 0` otherwise conflates: a pin
+that was attempted and refused, which is a defect, and a platform where there
+was nothing to attempt, which is a property. A consumer grouping results by
+whether pinning was even possible reads this rather than parsing the warning
+text. Always true on Linux.
 
 **`environment.pinned_cpus`** — the distinct CPUs the worker pool actually
 spread across. `threads_used` says how many threads were asked for and answers
