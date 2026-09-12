@@ -401,7 +401,12 @@ check-kernels: $(BUILD)/test_kernels
 # Strip any -NN version suffix first: gcc-15 and clang-20 are ordinary
 # spellings and the old pattern matched neither, so OBJDUMP became the
 # compiler itself and the scalar-purity guard silently found no kernels.
-OBJDUMP ?= $(shell echo $(CC) | sed 's/-[0-9][0-9]*$$//; s/g\?cc$$/objdump/; s/clang/objdump/')
+#
+# sed -E because \? is a GNU extension that BSD sed (and thus macOS) takes
+# literally, which reproduced that same failure for a different reason: plain
+# `cc` went through unchanged and the guard was handed the compiler to
+# disassemble with. ERE spells the optional `g` portably.
+OBJDUMP ?= $(shell echo $(CC) | sed -E 's/-[0-9]+$$//; s/g?cc$$/objdump/; s/clang/objdump/')
 
 check-scalar: $(BUILD)/kernel_scalar.o
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)
@@ -463,11 +468,14 @@ check-pinning: $(BUILD)/valubench
 	          2>/dev/null); \
 	   got=$$(printf '%s' "$$out" | python3 -c \
 	     'import json,sys; e=json.load(sys.stdin)["environment"]; \
-print(e["threads_used"], e["pinned_cpus"])' 2>/dev/null); \
+print(e["threads_used"], e["pinned_cpus"], int(e.get("can_pin", True)))' 2>/dev/null); \
 	   used=$$(echo "$$got" | cut -d" " -f1); \
 	   cpus=$$(echo "$$got" | cut -d" " -f2); \
+	   canpin=$$(echo "$$got" | cut -d" " -f3); \
 	   if [ -z "$$cpus" ]; then \
 	     echo "  FAIL  pinning       no pinned_cpus in the result"; exit 1; \
+	   elif [ "$$canpin" = 0 ]; then \
+	     echo "  skip  pinning       (no thread affinity API on this platform)"; \
 	   elif [ "$$cpus" -lt 2 ]; then \
 	     echo "  FAIL  pinning       $$used threads pinned onto $$cpus cpu"; exit 1; \
 	   else \
