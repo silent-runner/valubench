@@ -151,6 +151,7 @@ CSV_COLUMNS = [
     "cpu",
     "virtualized",
     "smt_active",
+    "pinned_cpus",
     "governor",
     "governor_at_end",
     "freq_khz_at_end",
@@ -541,6 +542,11 @@ def _row_from_result(d, status, point=None):
         # cross-machine comparison -- and it is one of the larger sources of
         # run-to-run variance.
         "smt_active": e.get("smt_active", ""),
+        # Neither did this, which is worse: pinned_cpus exists because a pool
+        # that collapsed onto one core under-reported by 3.4x while reporting
+        # verified, and the results README tells readers to check it against
+        # threads_used. They could not -- it stopped at the JSON.
+        "pinned_cpus": e.get("pinned_cpus", ""),
         "governor": e["governor"],
         # Sampled again after the timed region: a clock or temperature read
         # only at startup describes a machine that has not run yet.
