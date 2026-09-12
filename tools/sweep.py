@@ -152,6 +152,7 @@ CSV_COLUMNS = [
     "virtualized",
     "smt_active",
     "pinned_cpus",
+    "can_pin",
     "governor",
     "governor_at_end",
     "freq_khz_at_end",
@@ -547,6 +548,10 @@ def _row_from_result(d, status, point=None):
         # verified, and the results README tells readers to check it against
         # threads_used. They could not -- it stopped at the JSON.
         "pinned_cpus": e.get("pinned_cpus", ""),
+        # And pinned_cpus is 0 both when a pin was refused and when the
+        # platform had no affinity API to attempt, so it needs can_pin beside
+        # it or a query cannot tell a broken pool from a Mac.
+        "can_pin": e.get("can_pin", ""),
         "governor": e["governor"],
         # Sampled again after the timed region: a clock or temperature read
         # only at startup describes a machine that has not run yet.

@@ -474,7 +474,7 @@ print(e["threads_used"], e["pinned_cpus"], int(e.get("can_pin", True)))' 2>/dev/
 	   canpin=$$(echo "$$got" | cut -d" " -f3); \
 	   if [ -z "$$cpus" ]; then \
 	     echo "  FAIL  pinning       no pinned_cpus in the result"; exit 1; \
-	   elif [ "$$canpin" = 0 ]; then \
+	   elif [ "$$canpin" = 0 ] && [ "$$(uname -s)" != Linux ]; then \
 	     echo "  skip  pinning       (no thread affinity API on this platform)"; \
 	   elif [ "$$cpus" -lt 2 ]; then \
 	     echo "  FAIL  pinning       $$used threads pinned onto $$cpus cpu"; exit 1; \

@@ -60,7 +60,7 @@ NUM = {
     "kernel_ns_per_pass", "transfer_ns_per_pass", "samples", "loadavg_1min",
     "freq_khz_at_end", "temp_milli_c", "temp_milli_c_at_end", "pinned_cpus",
 }
-BOOL = {"stable", "verified", "smt_active"}
+BOOL = {"stable", "verified", "smt_active", "can_pin"}
 
 
 def identify(capture):

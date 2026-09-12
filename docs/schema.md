@@ -36,7 +36,7 @@ The version number moves when a field is removed or its meaning changes.
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
 | `device` | present only for device kernels: name, vendor, driver, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode the per-pass transfer figures |
-| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
+| `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `can_pin`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the joules/watts/`hashes_per_joule` figures with their `sources` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
 
@@ -62,6 +62,13 @@ A clock that fell more than 5%, or a package that warmed more than 10 C, raises
 a warning. `-1` means the reading was not available; `temp_source` names the
 sensor believed, and only CPU or package zones are — an ambient reading dressed
 as a core temperature would be worse than none.
+
+**`environment.can_pin`** — whether this platform has a thread-affinity API at
+all. It separates two states that `pinned_cpus: 0` otherwise conflates: a pin
+that was attempted and refused, which is a defect, and a platform where there
+was nothing to attempt, which is a property. A consumer grouping results by
+whether pinning was even possible reads this rather than parsing the warning
+text. Always true on Linux.
 
 **`environment.pinned_cpus`** — the distinct CPUs the worker pool actually
 spread across. `threads_used` says how many threads were asked for and answers
