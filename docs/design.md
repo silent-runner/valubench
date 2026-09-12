@@ -388,3 +388,43 @@ executed. GPU paths will have the same problem.
 
 **Access to representative hardware is a prerequisite for the results being
 meaningful, not a nice-to-have**, and should be planned alongside the code.
+
+## 10. Apple silicon is in scope now, under a condition
+
+The brief says "Must run on Linux distributions. Apple and Windows are not
+relevant for this application." That was right for what the project was then: a
+self-contained binary for a bare Linux box, validated on rented cloud hardware.
+It stays in the brief above, because the brief is a record of what was asked
+rather than a live specification.
+
+**What changed is the evidence, not the goal.** Every ARM measurement this
+project holds came from a virtual machine — Graviton3, Graviton4 and Grace are
+all EC2 or cloud instances, which is why `virtualized` exists as a recorded
+field at all. Apple silicon is a bare-metal ARM implementation from a fourth
+vendor, with a wide vector unit and a core design that shares nothing with
+Neoverse. On a benchmark whose entire thesis is that conclusions drawn from one
+part do not survive the next one, declining that data costs more than it saves.
+
+**The condition is that Linux pays nothing.** Concretely, three things, and a
+port that cannot meet all three is not worth having:
+
+- **No change to generated code on Linux.** The threading primitives this
+  harness needs are not portable, so a port routes them through a seam; the
+  seam has to be `static inline` and fold to the same instructions. This is
+  checkable with the `objdump` comparison AGENTS.md already describes, and the
+  bar is the hash loop being bit-identical rather than merely equivalent.
+- **No weakening of the correctness gate.** A platform that cannot pin threads
+  may skip `check-pinning`, but the skip must be conditioned on the platform,
+  not on a flag the binary under test reports about itself. The gate exists
+  because a pinning defect once under-reported throughput several-fold while
+  reporting `verified`, and a gate the subject can switch off is not that gate.
+- **A platform that cannot pin must say so in the data**, not merely measure
+  noisier. `pinned_cpus` alone cannot distinguish "the pin was refused" from
+  "there was nothing to ask", and those are different facts about a result.
+  Whatever field carries that distinction has to reach the capture CSVs, or a
+  cross-machine query cannot see it.
+
+**Windows remains out of scope**, unchanged and for the original reason.
+
+Finding 9 above is also now out of date in the direction that matters: the
+AVX-512 path has executed on three parts, and validation hardware arrived.
