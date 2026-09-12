@@ -64,7 +64,7 @@ NUM = {
     "hashing_watts", "hashes_per_joule", "hashes_per_joule_machine",
     "pipeline_chunks", "overlap_efficiency", "gpu_mhz_min", "gpu_mhz_max",
 }
-BOOL = {"stable", "verified", "smt_active"}
+BOOL = {"stable", "verified", "smt_active", "can_pin"}
 
 
 def identify(capture):
