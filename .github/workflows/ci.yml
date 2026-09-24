@@ -18,7 +18,7 @@ jobs:
         cc: [gcc, clang]
     name: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No dependencies beyond a C compiler and make. OpenCL is dlopen'd at run
       # time, so its absence on a runner is a normal no-device outcome rather
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     name: aarch64 (cross, emulated)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install the cross toolchain and emulator
         run: |
@@ -260,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     name: asan + ubsan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # -O1 rather than the default -O2: sanitizer builds do not need it, and a
       # single cc1 on the instrumented s8 kernels peaked at 2.3 GB, which OOM'd
@@ -327,7 +327,7 @@ jobs:
     runs-on: ubuntu-latest
     name: opencl (pocl)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install a software OpenCL device
         run: |
