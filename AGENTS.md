@@ -5,8 +5,9 @@ want [CONTRIBUTING.md](CONTRIBUTING.md), which covers the same ground plus
 build and review expectations.
 
 Read this first, then `src/kernels/cpu/matrix.h` — the kernel matrix is the
-source of truth for what exists, and 48 of the 64 registered kernels are macro
-expansions with no source-level definition to grep for.
+source of truth for what exists, and every CPU kernel in it is a macro
+expansion with no source-level definition to grep for. `valubench --list` shows
+what a given build registers.
 
 ## The rules most likely to be broken by accident
 
