@@ -183,6 +183,10 @@ uint64_t vb_now_ns(void);
 /* Online CPUs, at least 1. */
 unsigned vb_online_cpus(void);
 
+/* Threads to use when --threads is not given: the CPUs this process is allowed
+   on, which under taskset, a cpuset or a container is fewer than are online. */
+unsigned vb_default_threads(void);
+
 /*
  * Every kernel's group size must divide VB_BATCH_LCM, so the batch is always a
  * whole number of groups and the checksum covers the same messages regardless

@@ -132,6 +132,14 @@
 void vb_build_message(uint32_t index, uint32_t bytes, uint8_t *out);
 
 /*
+ * How many distinct messages vb_build_message() can produce at this length.
+ * Only the leading four bytes carry the index, so a shorter message repeats
+ * after 256^bytes -- and repeated digests cancel under XOR. A corpus larger
+ * than this has a fingerprint blind to some or all of its messages.
+ */
+uint64_t vb_distinct_messages(uint32_t bytes);
+
+/*
  * Full workload identifier, e.g. "md5-full-55x1" or "md5-full-4096x64". Any
  * change to the work per hash changes this string, so results from different
  * workloads are never silently compared.

@@ -46,7 +46,7 @@ static void usage(FILE *f, const char *argv0)
 "                       ('any' is the default). A CPU baseline on a machine\n"
 "                       with a GPU needs this: otherwise the device kernel\n"
 "                       wins the probe and the result is not a CPU number.\n"
-"  --threads N          worker threads (default: one per online CPU, %u here)\n"
+"  --threads N          worker threads (default: one per allowed CPU, %u here)\n"
 "  --message-bytes L    message length (default %u, range %u..%u). Raises\n"
 "                       both compute and bytes read per hash.\n"
 "  --iterations N       chained hashes per hash (default 1, max %u). Raises\n"
@@ -81,7 +81,7 @@ static void usage(FILE *f, const char *argv0)
 "\n"
 "Exit status: 0 success, 1 verification failure, 2 usage error,\n"
 "             3 result too noisy to trust.\n",
-            argv0, vb_online_cpus(),
+            argv0, vb_default_threads(),
             VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
             VB_MAX_ITERS, VB_MAX_SAMPLES);
 }
@@ -348,7 +348,7 @@ static void emit_reference_ladder(const vb_config *cfg, const uint32_t *iters,
     }
 
     vb_reference_checksums_mt(cfg->alg, 0, count, cfg->message_bytes,
-                              iters, n, vb_online_cpus(), out);
+                              iters, n, vb_default_threads(), out);
 
     printf("{\n");
     printf("  \"schema\": \"valubench/reference/1\",\n");
@@ -524,6 +524,33 @@ int main(int argc, char **argv)
         break;
     }
 
+    /*
+     * Forcing a kernel also fixes the algorithm: they are not separable. So the
+     * kernel is found before anything that is validated against the algorithm.
+     * It used to be found after, which checked --message-bytes and --expect
+     * against the default MD5 and then ran SHA-512: `--kernel sha512/scalar-s1
+     * --iterations 2` passed the digest-fits-message guard below and the oracle
+     * wrote a 64-byte digest into a 55-byte message.
+     */
+    const vb_kernel *k = NULL;
+
+    if (cfg.force_kernel) {
+        size_t count;
+        const vb_kernel *ks = vb_kernels(&count);
+        for (size_t i = 0; i < count; i++) {
+            if (!strcmp(ks[i].name, cfg.force_kernel)) {
+                k = &ks[i];
+                break;
+            }
+        }
+        if (!k) {
+            fprintf(stderr, "valubench: no kernel named '%s' (try --list)\n",
+                    cfg.force_kernel);
+            return VB_EXIT_USAGE;
+        }
+        cfg.alg = vb_algorithm_by_id(k->alg);
+    }
+
     if (cfg.n_samples < 1 || cfg.n_samples > VB_MAX_SAMPLES) {
         fprintf(stderr, "valubench: --samples must be 1..%d\n", VB_MAX_SAMPLES);
         return VB_EXIT_USAGE;
@@ -586,6 +613,25 @@ int main(int argc, char **argv)
         return VB_EXIT_USAGE;
     }
 
+    /*
+     * The corpus must not repeat a message. Repeated digests cancel under XOR,
+     * so a repeated message is one the fingerprint cannot see: 1536 one-byte
+     * messages are 256 values six times over, the checksum was all zeros, and
+     * a kernel returning nothing would have verified. There is no generator
+     * that fixes this -- a one-byte message has 256 values -- so refuse.
+     */
+    if (vb_batch_messages(&cfg) > vb_distinct_messages(cfg.message_bytes)) {
+        fprintf(stderr,
+"valubench: --message-bytes %u allows %llu distinct messages, and this\n"
+"  working set needs %llu. Repeated messages cancel in the XOR checksum, so\n"
+"  verification could not see them. Lower --working-set-kb or lengthen the\n"
+"  message.\n",
+                cfg.message_bytes,
+                (unsigned long long) vb_distinct_messages(cfg.message_bytes),
+                (unsigned long long) vb_batch_messages(&cfg));
+        return VB_EXIT_USAGE;
+    }
+
     if (cfg.threads > VB_MAX_THREADS) {
         fprintf(stderr, "valubench: --threads must be 0..%d\n", VB_MAX_THREADS);
         return VB_EXIT_USAGE;
@@ -604,22 +650,7 @@ int main(int argc, char **argv)
 
     /* Autotune output is progress, not result: keep it off stdout in JSON mode
        so the JSON stays parseable without filtering. */
-    const vb_kernel *k = NULL;
-
-    if (cfg.force_kernel) {
-        size_t count;
-        const vb_kernel *ks = vb_kernels(&count);
-        for (size_t i = 0; i < count; i++) {
-            if (!strcmp(ks[i].name, cfg.force_kernel)) {
-                k = &ks[i];
-                break;
-            }
-        }
-        if (!k) {
-            fprintf(stderr, "valubench: no kernel named '%s' (try --list)\n",
-                    cfg.force_kernel);
-            return VB_EXIT_USAGE;
-        }
+    if (k) {
         if (!k->available()) {
             fprintf(stderr,
                     "valubench: kernel '%s' needs %s, which this CPU lacks\n",
@@ -658,8 +689,6 @@ int main(int argc, char **argv)
                     cfg.where == VB_WHERE_CPU ? "cpu" : "device");
             return VB_EXIT_USAGE;
         }
-        /* Forcing a kernel also fixes the algorithm: they are not separable. */
-        cfg.alg = vb_algorithm_by_id(k->alg);
     } else {
         k = vb_autotune(&cfg, verbose && !as_json);
         if (!k) {
