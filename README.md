@@ -202,9 +202,6 @@ Known gaps, in the order they matter:
 - **SVE2 is measured only at 128 bits.** The kernels exist and are validated on
   Neoverse V1 and V2, but no part yet offers SVE2 above 128 bits, so vector
   width and instruction-set generation stay conflated on that side.
-- **The stream ladder stops at eight.** `matrix.h` instantiates 1, 2, 3, 4, 6
-  and 8 streams. On a desktop Zen 5 core `md5/avx512` was still gaining at
-  eight, so at least one shipped part is not bracketed by the ladder.
 - **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
   Rusticl have never run this.
 - **Every transfer figure is pageable memory.** An A10 sustained 10.9 GB/s over

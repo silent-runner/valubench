@@ -244,6 +244,25 @@ the negative: **register count does not predict the peak stream count**, and the
 mechanism that does track it is where the spilling starts rather than how much
 of it there is.
 
+**The AVX-512 ladder is bracketed, and it ends in a cliff.** The ladder stops
+at eight streams, and on a desktop Zen 5 core `md5/avx512` under gcc was still
+gaining there, so whether the peak lay beyond it was open. Measured 2026-09-24
+on a Ryzen 9 9950X, one thread, a 256 KiB corpus, five separate processes per
+point, with s12 instantiated in a scratch build for the purpose: under gcc
+16.2.1, s8 stays best at about 580 MH/s and s12 falls to about 266 — below s4.
+Under clang 22.1.8, s6 is best and s8 has already collapsed to about 274; s12
+is no better. The peak is s8 or s6 depending on the compiler, never above, so
+no AVX-512 single-core figure from this part was a lower bound for want of a
+longer ladder, and s12 was not added.
+
+The collapse is a cliff rather than a slope, which is what the section above
+predicts. MD5 keeps four state vectors live per stream, so s8 needs all 32
+architectural vector registers for its state alone and s12 needs 48. Counting
+stack-addressed instructions in each kernel — the whole function this time, not
+the round body in isolation — clang's s8 carries about 1.6x gcc's, and clang's
+s8 is the one that collapsed. The two compilers disagree about whether 32 live
+vectors in 32 registers can be scheduled; neither can do 48.
+
 ### 2.5 Autotune
 
 Serious GPU hash implementations do not ask the user for work sizes. They search
