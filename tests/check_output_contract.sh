@@ -240,5 +240,58 @@ for spec in "--algorithm sha512 --message-bytes 64 --reference-ladder 1,2" \
     fi
 done
 
+# A forced kernel fixes the algorithm, so every check that depends on the
+# algorithm must see the kernel's, not the default. They did not: --kernel was
+# resolved after --message-bytes and --expect had been validated against MD5,
+# so `--kernel sha512/scalar-s1 --iterations 2` passed the digest-fits-message
+# guard and the oracle wrote a 64-byte digest into a 55-byte message. glibc
+# aborted on the corrupted heap.
+expect_exit 2 "forced kernel, digest outgrows message" \
+    "$BIN" --kernel sha512/scalar-s1 --iterations 2 --threads 1 \
+           --samples 2 --time-ms 20 --warmup-ms 0
+# --expect is parsed at the forced kernel's digest width: an MD5-width value
+# for a SHA-512 kernel is a usage error, not a run that then fails verification.
+expect_exit 2 "forced kernel, expect at wrong width" \
+    "$BIN" --kernel sha512/scalar-s1 --expect "$(printf '0%.0s' $(seq 32))"
+# And the right width is accepted.
+sum=$("$BIN" --algorithm sha512 --working-set-kb 64 --reference-ladder 1 2>/dev/null |
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["checksums"][0]["checksum"])' \
+      2>/dev/null || true)
+"$BIN" --kernel sha512/scalar-s1 --working-set-kb 64 --expect "$sum" --threads 1 \
+       --samples 2 --time-ms 20 --warmup-ms 0 >/dev/null 2>&1 && rc=0 || rc=$?
+if [ -n "$sum" ] && { [ "$rc" = 0 ] || [ "$rc" = 3 ]; }; then
+    pass=$((pass + 1))
+else
+    echo "  FAIL  output-contract  forced sha512 kernel refused its own checksum (exit $rc)"
+    fail=1
+fi
+
+# A corpus with more messages than the message length can hold distinct ones
+# repeats messages, and repeated digests cancel under XOR. 1536 one-byte
+# messages are 256 values six times over, so the fingerprint was all zeros and
+# a kernel returning nothing would have verified. Refused, as is its ladder.
+expect_exit 2 "corpus repeats messages"        "$BIN" --message-bytes 1 --working-set-kb 96
+expect_exit 2 "corpus repeats messages, ladder" \
+    "$BIN" --message-bytes 2 --working-set-kb 8192 --reference-ladder 1
+# The largest corpus that stays distinct still runs: 65536 two-byte messages.
+expect_exit 0 "corpus exactly distinct, ladder" \
+    "$BIN" --message-bytes 2 --working-set-kb 4096 --reference-ladder 1
+
+# The default thread count is the CPUs the process may use, not the CPUs the
+# machine has. It was the online count, so under `taskset -c 0,1` on a 32-CPU
+# box a default run put 32 workers on two CPUs and reported threads_used 32.
+if command -v taskset >/dev/null 2>&1 && [ "$(nproc --all 2>/dev/null || echo 1)" -ge 3 ]; then
+    used=$(taskset -c 0,1 "$BIN" --json --where cpu --samples 2 --time-ms 20 \
+               --warmup-ms 0 2>/dev/null |
+           python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"]["threads_used"])' \
+           2>/dev/null || true)
+    if [ "$used" = 2 ]; then
+        pass=$((pass + 1))
+    else
+        echo "  FAIL  output-contract  default threads under a 2-CPU mask: got '$used', want 2"
+        fail=1
+    fi
+fi
+
 [ "$fail" = 0 ] || exit 1
 printf '  ok    output-contract  (%d checks: JSON parses, exit codes, tooling)\n' "$pass"

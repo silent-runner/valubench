@@ -981,7 +981,7 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     ap.add_argument("--iterations", default="1", metavar="LIST")
     ap.add_argument("--working-set-kb", default="1024", metavar="LIST")
     ap.add_argument("--threads", default=None, metavar="LIST",
-                    help="default: one per online CPU")
+                    help="default: one per CPU this process is allowed on")
     ap.add_argument("--kernel", default=None, metavar="LIST",
                     help="force kernels, comma-separated; skips autotune and "
                          "is much faster for large grids. 'md5/avx2-s4' pairs "
@@ -1041,7 +1041,13 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         sys.exit("sweep: --resume needs --csv, since that is the file it resumes")
 
     if args.threads is None:
-        args.threads = str(os.cpu_count() or 1)
+        # The CPUs this process may use, as the binary's own default does. The
+        # online count oversubscribes under taskset, a cpuset or a container.
+        # sched_getaffinity does not exist on macOS, where nothing narrows it.
+        try:
+            args.threads = str(len(os.sched_getaffinity(0)) or 1)
+        except AttributeError:
+            args.threads = str(os.cpu_count() or 1)
 
     try:
         args.message_bytes = parse_list(args.message_bytes, "--message-bytes")

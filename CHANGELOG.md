@@ -3,6 +3,38 @@
 Notable changes. Measured figures are not recorded here; they are tracked
 outside this repository while a durable format for them is decided.
 
+## Unreleased
+
+### Fixed
+
+- **A heap overflow when `--kernel` names another algorithm's kernel.**
+  Forcing a kernel fixes the algorithm, but the kernel was looked up after
+  `--message-bytes` and `--expect` had been validated against the default MD5.
+  `--kernel sha512/scalar-s1 --iterations 2` passed the digest-fits-message
+  guard and the oracle wrote a 64-byte digest into a 55-byte message; glibc
+  aborted. `--expect` was likewise parsed at MD5's width for a SHA-512 kernel.
+  The kernel is now resolved before either check.
+
+- **A vacuous fingerprint on very short messages.** Only the first four bytes
+  of a message carry its index, so a one-byte message has 256 values and a
+  corpus of 1,536 repeats each six times. Repeated digests cancel under XOR:
+  `--message-bytes 1 --working-set-kb 96` reported checksum `000…0`, verified,
+  and a kernel returning zero would have passed. A corpus with more messages
+  than the length can make distinct is now a usage error. One-byte messages
+  can no longer be run at all, since the smallest corpus is 768 messages.
+
+- **The OpenCL partial buffer could be overrun on small work-groups.** It was
+  sized for work-groups of at least 64, but a kernel the device caps below 64
+  is tuned down to 32 or less, and each group writes one partial. Sized now
+  from the smallest group the tuner will pick for that kernel, and a launch
+  with more groups than the buffer holds is refused rather than run.
+
+- **The default thread count oversubscribed restricted CPU sets.** It was
+  the online CPU count, so under `taskset -c 0,1` on a 32-CPU machine a
+  default run put 32 workers on two CPUs and reported `threads_used` 32. It is
+  now the number of CPUs the process is allowed on, in the binary and in
+  `sweep.py`.
+
 ## 0.7.0 — 2026-09-09
 
 ### Fixed

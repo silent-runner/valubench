@@ -110,6 +110,10 @@ void vb_ocl_ctx_free(vb_ocl_ctx *c)
 #define VB_OCL_MIN_LOCAL 64u
 #define VB_OCL_MAX_LOCAL 512u
 
+/* The smallest size tune_geometry() will fall back to when a kernel permits
+   less than VB_OCL_MIN_LOCAL. */
+#define VB_OCL_FLOOR_LOCAL 8u
+
 /* Bytes one work-group's reduced digest occupies. */
 static size_t partial_bytes(const vb_ocl_ctx *c)
 {
@@ -139,24 +143,14 @@ static size_t vb_ocl_max_global(const vb_ocl_ctx *c)
 }
 
 /*
- * Pick the launch geometry by measurement rather than by formula.
- *
- * The right number of work-items is a device property, not a workload one: it
- * depends on compute units, threads resident per unit, and how much the
- * scheduler needs in flight to hide latency. Guessing wrong is expensive -- an
- * earlier version launched exactly one work-item per message, tying occupancy
- * to --working-set-kb and costing 1.8x on the development iGPU.
- *
- * Probes run once at init, outside any timed region.
+ * The range of work-group sizes tune_geometry() will consider for this kernel.
+ * A function of its own because the partial buffers are sized from the floor
+ * before tuning runs, and the two must agree.
  */
-static int tune_geometry(vb_ocl_ctx *c)
+static void local_bounds(const vb_ocl_ctx *c, size_t *floor_out,
+                         size_t *ceiling_out)
 {
     const vb_ocl *cl = vb_ocl_api();
-    const size_t cap = vb_ocl_max_global(c);
-    double best = -1.0;
-    size_t best_global = 0, best_local = 0;
-
-    c->repeats = 1;
 
     /*
      * The ceiling is the smaller of what the device allows in general and what
@@ -181,8 +175,34 @@ static int tune_geometry(vb_ocl_ctx *c)
        giving up. The reduction halves its span each step, so the size must
        stay a power of two; 8 is the smallest worth attempting. */
     size_t floor_local = VB_OCL_MIN_LOCAL;
-    while (floor_local > 8 && floor_local > ceiling)
+    while (floor_local > VB_OCL_FLOOR_LOCAL && floor_local > ceiling)
         floor_local >>= 1;
+
+    *floor_out = floor_local;
+    *ceiling_out = ceiling;
+}
+
+/*
+ * Pick the launch geometry by measurement rather than by formula.
+ *
+ * The right number of work-items is a device property, not a workload one: it
+ * depends on compute units, threads resident per unit, and how much the
+ * scheduler needs in flight to hide latency. Guessing wrong is expensive -- an
+ * earlier version launched exactly one work-item per message, tying occupancy
+ * to --working-set-kb and costing 1.8x on the development iGPU.
+ *
+ * Probes run once at init, outside any timed region.
+ */
+static int tune_geometry(vb_ocl_ctx *c)
+{
+    const size_t cap = vb_ocl_max_global(c);
+    double best = -1.0;
+    size_t best_global = 0, best_local = 0;
+
+    c->repeats = 1;
+
+    size_t floor_local, ceiling;
+    local_bounds(c, &floor_local, &ceiling);
 
     for (size_t local = floor_local; local <= VB_OCL_MAX_LOCAL;
          local <<= 1) {
@@ -412,20 +432,27 @@ int vb_ocl_ctx_init(vb_ocl_ctx *c, const vb_ocl_device *dev,
 
     /*
      * Partial buffer is sized for the largest launch we might choose, since
-     * there is one uint4 per work-group and the geometry is picked below.
+     * there is one digest per work-group and the geometry is picked below. The
+     * most work-groups come from the smallest group the tuner can pick for
+     * this kernel. That used to be assumed to be VB_OCL_MIN_LOCAL, but a
+     * kernel capped below 64 work-items is tuned down to 32 or less, and its
+     * launch wrote past the end of the buffer.
      */
+    size_t floor_local, ceiling;
+    local_bounds(c, &floor_local, &ceiling);
     size_t max_global = vb_ocl_max_global(c);
-    c->n_partials = max_global / VB_OCL_MIN_LOCAL;
+    c->partial_cap = max_global / floor_local;
+    c->n_partials = c->partial_cap;
 
-    c->partials = malloc(c->n_partials * partial_bytes(c));
+    c->partials = malloc(c->partial_cap * partial_bytes(c));
     if (!c->partials) {
         set_err(c, "out of memory for %llu partials",
-                (unsigned long long) c->n_partials);
+                (unsigned long long) c->partial_cap);
         goto fail;
     }
 
     c->d_partial = cl->CreateBuffer(c->context, CL_MEM_WRITE_ONLY,
-                                    c->n_partials * partial_bytes(c),
+                                    c->partial_cap * partial_bytes(c),
                                     NULL, &err);
     if (!c->d_partial) {
         set_err(c, "partial buffer: %s", vb_ocl_strerror(err));
@@ -461,6 +488,16 @@ int vb_ocl_ctx_enqueue(vb_ocl_ctx *c, uint32_t iterations)
 
     size_t global = c->global_size;
     size_t local  = c->local_size;
+
+    /* Each work-group writes one partial and readback fetches all of them, so
+       a launch with more groups than the buffers hold writes out of bounds on
+       the device and reads out of bounds on the host. Refuse it. */
+    if (local == 0 || global / local > c->partial_cap) {
+        set_err(c, "launch of %llu work-groups exceeds the %llu partials "
+                   "allocated", (unsigned long long) (local ? global / local : 0),
+                (unsigned long long) c->partial_cap);
+        return -1;
+    }
 
     cl_uint a = 0;
     err  = cl->SetKernelArg(c->kernel, a++, sizeof c->d_corpus, &c->d_corpus);

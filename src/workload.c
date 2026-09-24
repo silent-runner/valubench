@@ -38,6 +38,12 @@ void vb_build_message(uint32_t index, uint32_t bytes, uint8_t *out)
         out[i] = pattern_byte(i);
 }
 
+uint64_t vb_distinct_messages(uint32_t bytes)
+{
+    uint32_t n = bytes < 4u ? bytes : 4u;
+    return (uint64_t) 1 << (8 * n);
+}
+
 const char *vb_workload_id(char *buf, size_t n, const vb_algorithm *alg,
                            uint32_t message_bytes, uint32_t iterations)
 {

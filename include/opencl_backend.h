@@ -53,6 +53,7 @@ typedef struct {
     uint32_t  repeats;
 
     uint64_t  n_partials;   /* one digest per work-group in the launch */
+    uint64_t  partial_cap;  /* how many the buffers hold; n_partials <= this */
     void     *partials;     /* host staging for the readback; elements are
                                partial_word_bytes wide */
 

@@ -98,7 +98,7 @@ void vb_config_defaults(vb_config *cfg)
     cfg->target_ms      = 100;
     cfg->n_samples      = 10;
     cfg->warmup_ms      = 300;
-    cfg->threads        = 0;    /* one per online CPU */
+    cfg->threads        = 0;    /* one per allowed CPU */
     cfg->iterations     = 1;
     cfg->message_bytes  = VB_DEFAULT_MSG_BYTES;
     cfg->alg            = vb_algorithm_by_id(VB_ALG_MD5);
@@ -186,6 +186,19 @@ unsigned vb_allowed_cpus(int *out, unsigned max)
     for (unsigned i = 0; i < n; i++)
         out[i] = cached[i];
     return n;
+}
+
+/*
+ * The default thread count. It was vb_online_cpus(), so a run confined by
+ * `taskset -c 0,1` on a 32-CPU machine started 32 workers, pinned them round
+ * the two CPUs it was allowed, and reported threads_used 32. Oversubscribing
+ * is still possible, but only by asking for it with --threads.
+ */
+unsigned vb_default_threads(void)
+{
+    int cpus[VB_MAX_THREADS];
+    unsigned n = vb_allowed_cpus(cpus, VB_MAX_THREADS);
+    return n ? n : 1;
 }
 
 int vb_batch_divides(const vb_kernel *k)
@@ -584,7 +597,7 @@ int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
     else
         vb_reference_checksum_mt(cfg->alg, corpus->start_index,
                                  corpus->n_messages, cfg->message_bytes,
-                                 cfg->iterations, vb_online_cpus(), expected);
+                                 cfg->iterations, vb_default_threads(), expected);
     k->fn(corpus->words, corpus->n_messages / group, corpus->blocks,
           cfg->iterations, checksum_out);
 
@@ -777,7 +790,7 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
                                      corpus->start_index
                                          + (uint32_t) (off * group),
                                      mine * group, cfg->message_bytes,
-                                     cfg->iterations, vb_online_cpus(),
+                                     cfg->iterations, vb_default_threads(),
                                      expect[i]);
         off += mine;
     }
@@ -1000,7 +1013,7 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
                                const vb_corpus *corpus, vb_result *out)
 {
     uint64_t expected[VB_MAX_DIGEST_WORDS], got[VB_MAX_DIGEST_WORDS];
-    unsigned threads = cfg->threads ? cfg->threads : vb_online_cpus();
+    unsigned threads = cfg->threads ? cfg->threads : vb_default_threads();
 
     memset(out, 0, sizeof *out);
     out->kernel = k;
@@ -1190,7 +1203,7 @@ const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
 
     if (verbose)
         printf("Autotune (%u threads):\n",
-               cfg->threads ? cfg->threads : vb_online_cpus());
+               cfg->threads ? cfg->threads : vb_default_threads());
 
     for (size_t i = 0; i < count; i++) {
         const vb_kernel *k = &ks[i];

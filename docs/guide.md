@@ -75,6 +75,14 @@ and the deficit is starvation rather than anything about long messages.
 Growing the corpus recovers it monotonically. This is the CPU form of the
 device-side limit described under "Saturating the device" below.
 
+**Very short messages cap the corpus from the other side.** A message carries
+its index in its first four bytes, so a message of one to three bytes has only
+256, 65,536 or 16,777,216 distinct values. A larger corpus would repeat
+messages, and repeated digests cancel in the XOR checksum -- 1,536 one-byte
+messages are 256 values six times over and fingerprint to all zeros -- so the
+tool refuses it. One-byte messages cannot be verified at any working set, since
+the smallest corpus is 768 messages; two-byte messages allow up to 4 MiB.
+
 ## Tuning compute intensity
 
 `--iterations N` chains N MD5s per hash, feeding each digest back as the first 16
@@ -346,7 +354,9 @@ SUBSYSTEM=="powercap", ACTION=="add", \
 
 ## Threading
 
-`--threads N`, defaulting to one per online CPU. The verified batch is
+`--threads N`, defaulting to one per CPU the process is allowed on -- under
+`taskset`, a cpuset or a container that is fewer than the machine has, and
+oversubscribing needs an explicit `--threads`. The verified batch is
 partitioned across threads; each holds the reference checksum for its own slice
 and verifies it every rep, so nothing synchronises in the hot path. Because XOR
 is associative, the partials recombine to exactly the single-threaded value —
