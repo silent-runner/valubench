@@ -248,6 +248,11 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             si->has_sve2    ? "true" : "false");
     fprintf(f, "    \"threads_used\": %u,\n", r->threads);
     fprintf(f, "    \"pinned_cpus\": %u,\n", r->pinned_cpus);
+    /* pinned_cpus is 0 both when a pin was refused and when the platform has
+       no affinity API to attempt; can_pin separates the two, so a reader
+       grouping results by whether pinning was even possible does not have to
+       parse the English warning text for it. */
+    fprintf(f, "    \"can_pin\": %s,\n", si->can_pin ? "true" : "false");
     /* The verdict and the evidence behind it, so a reader can disagree.
        "unknown" is a real answer on AArch64, where the x86 hypervisor
        bit has no equivalent and DMI may name nothing. */
