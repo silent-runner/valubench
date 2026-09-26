@@ -166,6 +166,10 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
                     r->transfer == VB_TRANSFER_STREAM ? "stream" : "resident",
                     ",");
         if (r->transfer == VB_TRANSFER_STREAM) {
+            /* What the upload actually read from, which can be pageable
+               when pinned was asked for and the platform could not map it. */
+            json_kv_str(f, "host_memory",
+                        r->device_host_pinned ? "pinned" : "pageable", ",");
             fprintf(f, "    \"transfer_bytes_per_pass\": %llu,\n",
                     (unsigned long long) r->device_transfer_bytes);
             fprintf(f, "    \"transfer_busy_fraction\": %.4f,\n",
@@ -388,10 +392,11 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
 
         if (r->transfer == VB_TRANSFER_STREAM) {
             fprintf(f, "  transfer    %.1f%% of wall, %.2f GB/s host->device "
-                       "(%.1f MiB per pass)\n",
+                       "(%.1f MiB per pass, %s)\n",
                     r->device_transfer_busy * 100.0,
                     r->device_transfer_gbps,
-                    (double) r->device_transfer_bytes / 1048576.0);
+                    (double) r->device_transfer_bytes / 1048576.0,
+                    r->device_host_pinned ? "pinned" : "pageable");
             fprintf(f, "  bound by    %s  (compute/transfer = %.2f)\n",
                     r->compute_transfer_ratio >= 1.0 ? "COMPUTE" : "TRANSFER",
                     r->compute_transfer_ratio);
@@ -643,6 +648,9 @@ void vb_report_capabilities_json(FILE *f)
     json_kv_str(f, "transfer",
                 def.transfer == VB_TRANSFER_STREAM ? "stream" : "resident",
                 ",");
+    json_kv_str(f, "host_memory",
+                def.host_memory == VB_HOST_PINNED ? "pinned" : "pageable",
+                ",");
     json_kv_str(f, "where",
                 def.where == VB_WHERE_CPU ? "cpu" :
                 def.where == VB_WHERE_DEVICE ? "device" : "any", ",");
@@ -654,6 +662,7 @@ void vb_report_capabilities_json(FILE *f)
             VB_EXIT_OK, VB_EXIT_VERIFY_FAILED, VB_EXIT_USAGE, VB_EXIT_NOISY);
 
     fprintf(f, "  \"transfer_modes\": [\"resident\", \"stream\"],\n");
+    fprintf(f, "  \"host_memory_modes\": [\"pinned\", \"pageable\"],\n");
     /* Autotune restrictions. "cpu" is what makes a CPU baseline measurable on
        a machine whose device kernel would otherwise win every probe. */
     fprintf(f, "  \"where_filters\": [\"any\", \"cpu\", \"device\"],\n");

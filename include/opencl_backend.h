@@ -66,6 +66,19 @@ typedef struct {
     const void *host_slice;   /* not owned; the corpus outlives the context */
     size_t      corpus_bytes;
 
+    /*
+     * Where streaming uploads read from. Pinned (page-locked) memory is what
+     * the copy engine can DMA from directly; pageable memory has to be staged
+     * through a driver bounce buffer first, which roughly halved the link rate
+     * on an A10. OpenCL has no pinned allocator as such -- the portable route,
+     * and the one NVIDIA documents, is a buffer the driver allocates
+     * (CL_MEM_ALLOC_HOST_PTR) mapped once for the life of the context. The
+     * slice is copied into it at setup, outside any timed region.
+     */
+    cl_mem      h_staging;
+    void       *staging;      /* mapped pointer, or NULL for pageable */
+    int         host_pinned;  /* what streaming actually reads from */
+
     /* Device-side times of the last run, from queue profiling. Compare against
        wall time to see launch and synchronisation overhead, and against each
        other to see which side of the PCIe crossover this point sits on. */
@@ -91,7 +104,9 @@ int  vb_ocl_ctx_init(vb_ocl_ctx *c, const vb_ocl_device *dev,
                      uint64_t first_group, uint64_t n_groups);
 
 /*
- * Turn streaming on or off after init.
+ * Turn streaming on or off after init, reading from pinned or pageable host
+ * memory. Returns 0; a pinned request the platform cannot satisfy falls back to
+ * pageable, which host_pinned then records, and is not an error.
  *
  * Deliberately not an argument to vb_ocl_ctx_init: geometry tuning and the
  * repeat calibration must run against the kernel alone, or they would be
@@ -103,7 +118,7 @@ int  vb_ocl_ctx_init(vb_ocl_ctx *c, const vb_ocl_device *dev,
  * any value above 1 would inflate the compute side of the very ratio this mode
  * exists to measure.
  */
-void vb_ocl_ctx_set_stream(vb_ocl_ctx *c, int on);
+int  vb_ocl_ctx_set_stream(vb_ocl_ctx *c, int on, int pinned);
 
 /* Launch once over this context's slice and fold the partials. 0 on success. */
 int  vb_ocl_ctx_run(vb_ocl_ctx *c, uint32_t iterations,

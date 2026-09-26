@@ -34,6 +34,19 @@ typedef enum {
     VB_TRANSFER_STREAM
 } vb_transfer_mode;
 
+/*
+ * Where a streaming upload reads from. PINNED is page-locked memory the copy
+ * engine can DMA from directly, and is what a real offload would use. PAGEABLE
+ * is ordinary malloc'd memory, which the driver copies through a bounce buffer
+ * first -- every transfer figure before pinned staging existed was this, and it
+ * is kept so those figures can be reproduced. Only meaningful with
+ * VB_TRANSFER_STREAM.
+ */
+typedef enum {
+    VB_HOST_PINNED = 0,
+    VB_HOST_PAGEABLE
+} vb_host_memory;
+
 typedef struct {
     const vb_kernel *kernel;
     unsigned threads;
@@ -97,6 +110,8 @@ typedef struct {
      * exceeds 1.0 is the binding constraint either way.
      */
     vb_transfer_mode transfer;
+    int      device_host_pinned;     /* streaming read pinned memory, on
+                                        every device; 0 if any fell back */
     double   device_transfer_busy;   /* fraction of wall spent uploading */
     double   device_transfer_gbps;   /* effective host-to-device rate */
     uint64_t device_transfer_bytes;  /* uploaded per pass, all devices */
@@ -164,6 +179,7 @@ typedef struct {
     int      device_index[VB_OCL_MAX_DEVICES];
     int      device_count;
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
+    vb_host_memory host_memory; /* what a streaming upload reads from */
     vb_where where;             /* which kernels autotune may pick from */
     double   cov_threshold;     /* result flagged unstable above this */
     int      pin_cpu;           /* pin worker threads to distinct cores */

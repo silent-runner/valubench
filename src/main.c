@@ -58,6 +58,11 @@ static void usage(FILE *f, const char *argv0)
 "                       putting the PCIe link inside the timed region. Use\n"
 "                       stream with a large --working-set-kb to find where\n"
 "                       compute overtakes transfer. No effect on CPU kernels.\n"
+"  --host-memory MODE   what a streaming upload reads from: 'pinned'\n"
+"                       (default) page-locked memory the copy engine reads\n"
+"                       directly, or 'pageable' ordinary memory, staged by\n"
+"                       the driver, as every transfer figure was before\n"
+"                       pinned staging. Only meaningful with --transfer stream.\n"
 "  --working-set-kb K   target corpus size (default 1024). Sets how many\n"
 "                       messages are hashed, so sweeping it walks the result\n"
 "                       from L1-resident to DRAM-bound.\n"
@@ -445,6 +450,18 @@ int main(int argc, char **argv)
             } else {
                 fprintf(stderr, "valubench: unknown transfer mode '%s' "
                                 "(resident, stream)\n", m);
+                return VB_EXIT_USAGE;
+            }
+        } else if (!strcmp(a, "--host-memory")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            const char *m = argv[++i];
+            if (!strcmp(m, "pinned")) {
+                cfg.host_memory = VB_HOST_PINNED;
+            } else if (!strcmp(m, "pageable")) {
+                cfg.host_memory = VB_HOST_PAGEABLE;
+            } else {
+                fprintf(stderr, "valubench: unknown host memory '%s' "
+                                "(pinned, pageable)\n", m);
                 return VB_EXIT_USAGE;
             }
         } else if (!strcmp(a, "--where")) {

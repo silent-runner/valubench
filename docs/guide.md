@@ -569,6 +569,13 @@ $ valubench --kernel md5/ocl-s1 --working-set-kb 65536 --transfer stream
   bound by    TRANSFER  (compute/transfer = 0.53)
 ```
 
+The upload reads pinned (page-locked) host memory, which the copy engine can
+DMA from directly. `--host-memory pageable` uploads from ordinary memory
+instead, which the driver has to stage through a bounce buffer: that is the
+honest model for "my data is in ordinary memory", and it is how every transfer
+figure was measured before pinned staging existed. The JSON and the sweep CSV
+record which one a run used, as `host_memory`.
+
 Sweep `--iterations` and the ratio walks through 1.0. That crossing is N\*:
 
 ```
@@ -643,10 +650,10 @@ pays at all after a few iterations have amortised the upload.
 
 Two caveats. The figures above are from an integrated GPU, where there is no
 PCIe at all and the "transfer" is a copy within system RAM; the number that
-carries a purchasing decision needs a discrete card. And streaming uploads from
-pageable host memory, which is honest for "my data is in ordinary memory" but
-about half what pinned staging achieves, so N\* should eventually be quoted as a
-pair.
+carries a purchasing decision needs a discrete card. And those figures were
+measured from pageable host memory, before pinned staging existed; on a discrete
+card N\* is worth quoting as a pair, `--host-memory pinned` and `pageable`,
+since the two answer different questions about where the data starts.
 
 ## Capturing a whole session
 

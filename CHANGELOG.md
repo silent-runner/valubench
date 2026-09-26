@@ -5,6 +5,18 @@ outside this repository while a durable format for them is decided.
 
 ## Unreleased
 
+### Changed
+
+- **Streaming uploads read pinned host memory by default.** Every transfer
+  figure until now came from pageable memory, which the driver stages through
+  a bounce buffer; a real offload would use page-locked memory the copy engine
+  reads directly. `--transfer stream` now copies the corpus into a mapped,
+  driver-allocated buffer at setup and uploads from that, so streaming link
+  rates and every N\* and break-even figure derived from them rise. `--host-memory
+  pageable` reproduces the old behaviour, and the JSON and the sweep CSV record
+  which one a run used (`host_memory`). A platform that cannot map such a buffer
+  falls back to pageable and says so there.
+
 ### Fixed
 
 - **A heap overflow when `--kernel` names another algorithm's kernel.**

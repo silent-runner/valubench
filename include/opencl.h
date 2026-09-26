@@ -35,10 +35,13 @@ typedef struct {
     cl_fn_ReleaseMemObject        ReleaseMemObject;
     cl_fn_EnqueueWriteBuffer      EnqueueWriteBuffer;
     cl_fn_EnqueueReadBuffer       EnqueueReadBuffer;
+    cl_fn_EnqueueMapBuffer        EnqueueMapBuffer;
+    cl_fn_EnqueueUnmapMemObject   EnqueueUnmapMemObject;
     cl_fn_CreateProgramWithSource CreateProgramWithSource;
     cl_fn_BuildProgram            BuildProgram;
     cl_fn_GetProgramBuildInfo     GetProgramBuildInfo;
     cl_fn_ReleaseProgram          ReleaseProgram;
+    cl_fn_GetProgramInfo          GetProgramInfo;
     cl_fn_CreateKernel            CreateKernel;
     cl_fn_SetKernelArg            SetKernelArg;
     cl_fn_GetKernelWorkGroupInfo  GetKernelWorkGroupInfo;

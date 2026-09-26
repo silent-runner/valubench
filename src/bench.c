@@ -105,6 +105,7 @@ void vb_config_defaults(vb_config *cfg)
     cfg->working_set_kb = 1024; /* 1 MiB: L2-resident on most machines */
     cfg->device_count   = 0;   /* every device */
     cfg->transfer       = VB_TRANSFER_RESIDENT;
+    cfg->host_memory    = VB_HOST_PINNED;
     cfg->where          = VB_WHERE_ANY;
     cfg->cov_threshold  = 3.5;  /* same spirit as the PTS default, RESEARCH 1.2 */
     cfg->pin_cpu        = 1;
@@ -778,7 +779,8 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
             goto fail_init;
         }
         n_init++;
-        vb_ocl_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM);
+        vb_ocl_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM,
+                              cfg->host_memory == VB_HOST_PINNED);
 
         /* Parallel, like the other two paths. This is the one that hurt: a
            device crossover sweep verifies iterations x messages of scalar
@@ -803,6 +805,13 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
              ctx[0].dev.driver_version);
     out->device_count = n_use;
     out->threads = 1;
+
+    /* Pinned only if every device got it: a fallback on one of them is the
+       figure that sets the pace, and would otherwise be misreported. */
+    out->device_host_pinned = 1;
+    for (int i = 0; i < n_use; i++)
+        if (!ctx[i].host_pinned)
+            out->device_host_pinned = 0;
 
     /* ---- one pass over every device, concurrently ---- */
     uint64_t got[VB_MAX_DIGEST_WORDS];

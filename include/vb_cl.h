@@ -63,6 +63,8 @@ typedef cl_ulong  cl_bitfield;
 typedef cl_bitfield cl_device_type;
 typedef cl_bitfield cl_mem_flags;
 typedef cl_bitfield cl_command_queue_properties;
+typedef cl_bitfield cl_map_flags;
+typedef cl_uint     cl_program_info;
 typedef cl_uint     cl_platform_info;
 typedef cl_uint     cl_device_info;
 typedef cl_uint     cl_program_build_info;
@@ -111,6 +113,7 @@ typedef intptr_t cl_context_properties;
 #define CL_DEVICE_VENDOR                 0x102C
 #define CL_DRIVER_VERSION                0x102D
 #define CL_DEVICE_VERSION                0x102F
+#define CL_DEVICE_EXTENSIONS             0x1030
 
 #define CL_MEM_READ_WRITE                (1 << 0)
 #define CL_MEM_WRITE_ONLY                (1 << 1)
@@ -119,6 +122,11 @@ typedef intptr_t cl_context_properties;
 #define CL_MEM_ALLOC_HOST_PTR            (1 << 4)
 #define CL_MEM_COPY_HOST_PTR             (1 << 5)
 
+#define CL_MAP_READ                      (1 << 0)
+#define CL_MAP_WRITE                     (1 << 1)
+
+#define CL_PROGRAM_BINARY_SIZES          0x1165
+#define CL_PROGRAM_BINARIES              0x1166
 #define CL_PROGRAM_BUILD_LOG             0x1183
 
 #define CL_KERNEL_WORK_GROUP_SIZE                     0x11B0
@@ -128,6 +136,42 @@ typedef intptr_t cl_context_properties;
 #define CL_PROFILING_COMMAND_END         0x1283
 
 #endif /* VB_HAVE_CL_HEADERS */
+
+/*
+ * Vendor queries for a device's PCI address, which is what lets one card seen
+ * through two APIs be recognised as one device. Not in every <CL/cl.h>, so
+ * defined here in both modes; the values are fixed by each extension's
+ * registry entry. cl_khr_pci_bus_info is preferred because it carries the PCI
+ * domain; the NVIDIA and AMD queries do not, which is ambiguous on a
+ * multi-domain server and is reported as such rather than guessed.
+ */
+#ifndef CL_DEVICE_PCI_BUS_INFO_KHR
+#define CL_DEVICE_PCI_BUS_INFO_KHR       0x410F
+#endif
+#ifndef CL_DEVICE_PCI_BUS_ID_NV
+#define CL_DEVICE_PCI_BUS_ID_NV          0x4008
+#endif
+#ifndef CL_DEVICE_PCI_SLOT_ID_NV
+#define CL_DEVICE_PCI_SLOT_ID_NV         0x4009
+#endif
+#ifndef CL_DEVICE_TOPOLOGY_AMD
+#define CL_DEVICE_TOPOLOGY_AMD           0x4037
+#endif
+
+typedef struct {
+    cl_uint pci_domain;
+    cl_uint pci_bus;
+    cl_uint pci_device;
+    cl_uint pci_function;
+} vb_cl_pci_bus_info_khr;
+
+/* cl_device_topology_amd: a 24-byte union whose PCIe member is a type word,
+   17 bytes of padding, then bus, device and function as single bytes. */
+typedef union {
+    struct { cl_uint type; cl_uint data[5]; } raw;
+    struct { cl_uint type; char unused[17]; char bus; char device;
+             char function; } pcie;
+} vb_cl_topology_amd;
 
 /* ---- entry points we resolve at runtime --------------------------------- */
 /*
@@ -168,6 +212,11 @@ typedef cl_int (CL_API_CALL *cl_fn_EnqueueWriteBuffer)(
 typedef cl_int (CL_API_CALL *cl_fn_EnqueueReadBuffer)(
     cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *,
     cl_uint, const cl_event *, cl_event *);
+typedef void * (CL_API_CALL *cl_fn_EnqueueMapBuffer)(
+    cl_command_queue, cl_mem, cl_bool, cl_map_flags, size_t, size_t,
+    cl_uint, const cl_event *, cl_event *, cl_int *);
+typedef cl_int (CL_API_CALL *cl_fn_EnqueueUnmapMemObject)(
+    cl_command_queue, cl_mem, void *, cl_uint, const cl_event *, cl_event *);
 
 typedef cl_program (CL_API_CALL *cl_fn_CreateProgramWithSource)(
     cl_context, cl_uint, const char **, const size_t *, cl_int *);
@@ -177,6 +226,8 @@ typedef cl_int (CL_API_CALL *cl_fn_BuildProgram)(
 typedef cl_int (CL_API_CALL *cl_fn_GetProgramBuildInfo)(
     cl_program, cl_device_id, cl_program_build_info, size_t, void *, size_t *);
 typedef cl_int (CL_API_CALL *cl_fn_ReleaseProgram)(cl_program);
+typedef cl_int (CL_API_CALL *cl_fn_GetProgramInfo)(
+    cl_program, cl_program_info, size_t, void *, size_t *);
 
 typedef cl_kernel (CL_API_CALL *cl_fn_CreateKernel)(
     cl_program, const char *, cl_int *);

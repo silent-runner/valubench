@@ -89,10 +89,13 @@ int vb_ocl_load(void)
     LOAD(ReleaseMemObject,        "clReleaseMemObject");
     LOAD(EnqueueWriteBuffer,      "clEnqueueWriteBuffer");
     LOAD(EnqueueReadBuffer,       "clEnqueueReadBuffer");
+    LOAD(EnqueueMapBuffer,        "clEnqueueMapBuffer");
+    LOAD(EnqueueUnmapMemObject,   "clEnqueueUnmapMemObject");
     LOAD(CreateProgramWithSource, "clCreateProgramWithSource");
     LOAD(BuildProgram,            "clBuildProgram");
     LOAD(GetProgramBuildInfo,     "clGetProgramBuildInfo");
     LOAD(ReleaseProgram,          "clReleaseProgram");
+    LOAD(GetProgramInfo,          "clGetProgramInfo");
     LOAD(CreateKernel,            "clCreateKernel");
     LOAD(SetKernelArg,            "clSetKernelArg");
     LOAD(GetKernelWorkGroupInfo,  "clGetKernelWorkGroupInfo");
