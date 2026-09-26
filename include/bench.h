@@ -34,10 +34,10 @@ typedef enum {
     VB_TRANSFER_STREAM,
     /*
      * Streaming with the upload overlapped: each pass goes up in chunks on a
-     * second queue while earlier chunks hash, continuously across passes.
-     * What a competent offload achieves, and so the sustained rate; STREAM,
-     * which uploads and then hashes, is the non-overlapped baseline beside
-     * it.
+     * second queue while earlier chunks hash, continuously across the passes
+     * of a timed sample. What a competent offload achieves, and so the
+     * sustained rate; STREAM, which uploads and then hashes, is the
+     * non-overlapped baseline beside it.
      */
     VB_TRANSFER_OVERLAP
 } vb_transfer_mode;
@@ -126,10 +126,12 @@ typedef struct {
      * and the accelerator is earning its place; below 1 the link is the
      * constraint and more device throughput buys nothing.
      *
-     * Note the ratio answers the question for a *pipelined* implementation too,
-     * even though this one uploads and computes in sequence. Overlapping the
-     * two can hide the smaller of them but never the larger, so whichever side
-     * exceeds 1.0 is the binding constraint either way.
+     * The ratio says which side binds a *pipelined* implementation too --
+     * overlapping the two hides the smaller and never the larger -- but not
+     * exactly where it starts to. A power-limited card kept busy through the
+     * uploads clocks lower than one that idles during them, so its overlapped
+     * kernel is slower and its knee earlier than this sequential ratio puts
+     * them. VB_TRANSFER_OVERLAP measures that rather than inferring it.
      */
     vb_transfer_mode transfer;
     int      device_host_pinned;     /* streaming read pinned memory, on
