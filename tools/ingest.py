@@ -60,6 +60,7 @@ NUM = {
     "kernel_ns_per_pass", "transfer_ns_per_pass", "samples", "loadavg_1min",
     "freq_khz_at_end", "temp_milli_c", "temp_milli_c_at_end", "pinned_cpus",
     "global_work", "local_work", "sweeps_per_launch",
+    "hashing_watts", "hashes_per_joule", "hashes_per_joule_machine",
 }
 BOOL = {"stable", "verified", "smt_active"}
 

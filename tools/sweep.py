@@ -161,6 +161,12 @@ CSV_COLUMNS = [
     "message_bytes_per_sec",
     "cov_percent",
     "stable",
+    # energy: the hardware that hashed (the cards used, the CPU package when
+    # the CPU hashed), and the whole machine as the denominator was before;
+    # blank where no counter measured it
+    "hashing_watts",
+    "hashes_per_joule",
+    "hashes_per_joule_machine",
     # device only; blank for CPU rows
     "kernel_busy_pct",
     "transfer_busy_pct",
@@ -607,6 +613,7 @@ def _row_from_result(d, status, point=None):
 
     # Absent entirely for CPU kernels, so every device field is optional.
     dev = d.get("device", {})
+    en = d.get("energy", {})
 
     return {
         "workload": b["workload"],
@@ -651,6 +658,9 @@ def _row_from_result(d, status, point=None):
         "message_bytes_per_sec": "%.6g" % r["message_bytes_per_second"],
         "cov_percent": "%.4g" % r["cov_percent"],
         "stable": "true" if r["stable"] else "false",
+        "hashing_watts": en.get("hashing_watts", ""),
+        "hashes_per_joule": en.get("hashes_per_joule", ""),
+        "hashes_per_joule_machine": en.get("hashes_per_joule_machine", ""),
         "kernel_busy_pct": pct(dev.get("kernel_busy_fraction")),
         "transfer_busy_pct": pct(dev.get("transfer_busy_fraction")),
         "transfer_gbytes_per_sec":

@@ -220,6 +220,91 @@ int main(void)
     failures += check("a short buffer stays terminated",
                       (double) (strlen(tiny) < sizeof tiny), 1.0); checks++;
 
+    /* ---- attribution: hashes/joule divides by the hardware that hashed ---- */
+
+    /* A CPU run beside an idle card: the package only. Before attribution a
+       box whose package counter was unreadable divided by the idle GPU. */
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL package-0", VB_PWR_CPU_PACKAGE, VB_PWR_PROV_RAPL, 0, 30.0);
+    add(&p, "RAPL dram",      VB_PWR_OTHER,       VB_PWR_PROV_RAPL, 0,  4.0);
+    snprintf(add(&p, "NVML card", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 20.0)->dev_id,
+             32, "0000:01:00.0");
+    vb_power_attribute(&p, 1, NULL, 0);
+    failures += check("cpu run: package and dram, not the idle card",
+                      vb_power_hashing_joules(&p), 34.0); checks++;
+    failures += check("cpu run: the machine total is unchanged",
+                      vb_power_total_joules(&p), 54.0); checks++;
+
+    /* The same box, no package counter: nothing that hashed was measured. */
+    memset(&p, 0, sizeof p);
+    snprintf(add(&p, "NVML card", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 20.0)->dev_id,
+             32, "0000:01:00.0");
+    vb_power_attribute(&p, 1, NULL, 0);
+    failures += check("cpu run, package unreadable: unmeasured, not the GPU",
+                      vb_power_hashing_joules(&p), -1.0); checks++;
+
+    /* Two cards, one used: that card only, and not the host package. */
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL package-0", VB_PWR_CPU_PACKAGE, VB_PWR_PROV_RAPL, 0, 30.0);
+    snprintf(add(&p, "NVML card0", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 70.0)->dev_id,
+             32, "0000:01:00.0");
+    snprintf(add(&p, "NVML card1", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 15.0)->dev_id,
+             32, "0000:02:00.0");
+    {
+        const char *used[1] = { "0000:02:00.0" };
+        vb_power_attribute(&p, 0, used, 1);
+    }
+    failures += check("gpu run: only the card used",
+                      vb_power_hashing_joules(&p), 15.0); checks++;
+
+    /* Both cards used: both. */
+    {
+        const char *used[2] = { "0000:01:00.0", "0000:02:00.0" };
+        vb_power_attribute(&p, 0, used, 2);
+    }
+    failures += check("gpu run: every card used",
+                      vb_power_hashing_joules(&p), 85.0); checks++;
+
+    /* An OpenCL CPU device beside a card: the CPU hashed too. */
+    {
+        const char *used[1] = { "0000:01:00.0" };
+        vb_power_attribute(&p, 1, used, 1);
+    }
+    failures += check("cpu device and a card: package and that card",
+                      vb_power_hashing_joules(&p), 100.0); checks++;
+
+    /* One card through two providers, which print its address in different
+       case: counted once. */
+    memset(&p, 0, sizeof p);
+    snprintf(add(&p, "card0 amdgpu", VB_PWR_GPU, VB_PWR_PROV_DRM, 0, 40.0)->dev_id,
+             32, "0000:a1:00.0");
+    snprintf(add(&p, "NVML-like", VB_PWR_GPU, VB_PWR_PROV_NVML, 0, 41.0)->dev_id,
+             32, "0000:A1:00.0");
+    {
+        const char *used[1] = { "0000:a1:00.0" };
+        vb_power_attribute(&p, 0, used, 1);
+    }
+    failures += check("one card, address in two cases: counted once",
+                      vb_power_hashing_joules(&p), 40.0); checks++;
+    failures += check("one card, address in two cases: machine total once",
+                      vb_power_total_joules(&p), 40.0); checks++;
+
+    /* An integrated GPU with no address of its own: the unidentified uncore
+       domain is taken to be it, rather than its energy dropped. */
+    memset(&p, 0, sizeof p);
+    add(&p, "RAPL package-0", VB_PWR_CPU_PACKAGE, VB_PWR_PROV_RAPL, 0, 10.0);
+    add(&p, "RAPL uncore",    VB_PWR_GPU,         VB_PWR_PROV_RAPL, 1,  2.0);
+    {
+        const char *used[1] = { "0000:00:02.0" };
+        vb_power_attribute(&p, 0, used, 1);
+    }
+    failures += check("igpu run: the uncore domain, not the package",
+                      vb_power_hashing_joules(&p), 2.0); checks++;
+    /* With the CPU hashing as well, the package already contains it. */
+    vb_power_attribute(&p, 1, (const char *const[]) { "0000:00:02.0" }, 1);
+    failures += check("igpu and cpu: the package, containing the iGPU once",
+                      vb_power_hashing_joules(&p), 10.0); checks++;
+
     printf("%d power-model checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

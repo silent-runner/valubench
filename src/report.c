@@ -285,7 +285,7 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
            development machine. vb_power_total_joules() counts each physical
            domain once. */
         double total = vb_power_total_joules(&r->power);
-        int have = total >= 0.0;
+        double hashing = vb_power_hashing_joules(&r->power);
 
         fprintf(f, "    \"available\": true,\n");
         if (cpu >= 0.0) {
@@ -298,9 +298,30 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             fprintf(f, "    \"gpu_watts\": %.4g,\n",
                     r->total_seconds > 0 ? gpu / r->total_seconds : 0.0);
         }
-        if (have && total > 0.0)
+        /* The denominator is the hardware that hashed: the cards used, the
+           CPU package when the CPU hashed. The whole machine is kept beside
+           it, since it was the denominator before and earlier captures used
+           it. */
+        if (hashing > 0.0) {
+            fprintf(f, "    \"hashing_joules\": %.4g,\n", hashing);
+            fprintf(f, "    \"hashing_watts\": %.4g,\n",
+                    r->total_seconds > 0 ? hashing / r->total_seconds : 0.0);
             fprintf(f, "    \"hashes_per_joule\": %.6g,\n",
+                    (double) r->total_hashes / hashing);
+        } else {
+            json_kv_str(f, "hashing_unmeasured",
+                        r->kernel && r->kernel->device
+                            ? "no energy source measured the devices that hashed"
+                            : "no energy source measured the CPU, which did the "
+                              "hashing -- its package counter (RAPL) is absent "
+                              "or not readable",
+                        ",");
+        }
+        if (total > 0.0) {
+            fprintf(f, "    \"machine_joules\": %.4g,\n", total);
+            fprintf(f, "    \"hashes_per_joule_machine\": %.6g,\n",
                     (double) r->total_hashes / total);
+        }
 
         /* Count what has been emitted, not what has been iterated. Separating
            on the loop index emits a leading comma whenever the first source is
@@ -314,9 +335,11 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
                 continue;
             fprintf(f, "%s{\"name\": ", emitted++ ? ", " : "");
             json_str(f, r->power.src[i].name);
-            fprintf(f, ", \"scope\": \"%s\", \"joules\": %.4g}",
+            fprintf(f, ", \"scope\": \"%s\", \"joules\": %.4g, "
+                       "\"counted\": %s}",
                     vb_power_scope_name(r->power.src[i].scope),
-                    r->power.src[i].joules);
+                    r->power.src[i].joules,
+                    r->power.src[i].counted ? "true" : "false");
         }
         fprintf(f, "]\n");
     } else {
@@ -460,25 +483,38 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
     }
 
     {
-        double cpu = vb_power_scope_joules(&r->power, VB_PWR_CPU_PACKAGE);
-        double gpu = vb_power_scope_joules(&r->power, VB_PWR_GPU);
         /* Each physical domain once; see the JSON path. */
         double total = vb_power_total_joules(&r->power);
+        double hashing = vb_power_hashing_joules(&r->power);
+        int any = 0;
 
         /* Sources can exist yet produce nothing -- a counter that failed to
-           sample, say. Print the section only when there is a number in it. */
-        if (cpu >= 0.0 || gpu >= 0.0) {
-        fprintf(f, "  Energy\n");
-        if (cpu >= 0.0)
-            fprintf(f, "    cpu       %8.2f J   %6.2f W\n", cpu,
-                    r->total_seconds > 0 ? cpu / r->total_seconds : 0.0);
-        if (gpu >= 0.0)
-            fprintf(f, "    gpu       %8.2f J   %6.2f W\n", gpu,
-                    r->total_seconds > 0 ? gpu / r->total_seconds : 0.0);
-        if (total > 0.0)
-            fprintf(f, "    efficiency %9.2f kH/J\n",
-                    (double) r->total_hashes / total / 1e3);
-        fprintf(f, "\n");
+           sample, say. Print the section only when there is a number in it.
+           One line per source, saying whether it measured hardware that
+           hashed, since that is what the efficiency divides by. */
+        for (int i = 0; i < r->power.n; i++) {
+            const vb_power_src *s = &r->power.src[i];
+            if (!s->valid)
+                continue;
+            if (!any++)
+                fprintf(f, "  Energy\n");
+            fprintf(f, "    %-34.34s %8.2f J %7.2f W  %s\n", s->name,
+                    s->joules,
+                    r->total_seconds > 0 ? s->joules / r->total_seconds : 0.0,
+                    s->counted ? "hashed" : "not hashing");
+        }
+        if (any) {
+            if (hashing > 0.0)
+                fprintf(f, "    efficiency %10.2f kH/J  over the hardware "
+                           "that hashed\n",
+                        (double) r->total_hashes / hashing / 1e3);
+            else
+                fprintf(f, "    efficiency  unmeasured -- no source measured "
+                           "the hardware that hashed\n");
+            if (total > 0.0 && total != hashing)
+                fprintf(f, "    machine    %10.2f kH/J  over every counter\n",
+                        (double) r->total_hashes / total / 1e3);
+            fprintf(f, "\n");
         }
     }
 

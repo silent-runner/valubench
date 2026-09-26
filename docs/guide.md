@@ -385,15 +385,30 @@ usually does. Where counters are readable, runs report joules, watts and
 
 ```
   Energy
-    cpu          10.43 J    21.15 W
-    gpu           1.75 J     3.55 W
-    efficiency  9772.71 kH/J
+    NVML NVIDIA RTX PRO 2000 Blackwell    13.60 J   67.86 W  hashed
+    RAPL package-0                        20.14 J  100.43 W  not hashing
+    efficiency  230103.55 kH/J  over the hardware that hashed
+    machine      92750.69 kH/J  over every counter
 ```
 
+**Efficiency divides by the hardware that hashed.** A device kernel counts the
+cards it ran on -- every card its API reaches, by default, or those named by
+`--device` -- matched to the energy sources by PCI address. A CPU kernel counts
+the CPU package and DRAM. When an OpenCL device is the CPU itself, the package
+is counted with the cards. The host's draw while it only drives the cards, and
+any card the run did not use, are still listed, marked "not hashing", and
+still in the `machine` figure: the whole machine over the run, which was the
+denominator until 2026-09-26 and is kept so earlier results can be compared.
+
+When nothing that hashed was measured -- a CPU run where RAPL is not readable,
+say -- the efficiency is reported as unmeasured, not computed from whatever
+counters did answer. Dividing a CPU's hashes by an idle GPU's joules is not a
+figure for anything.
+
 On the N100 the integrated GPU wins on both counts, and by more on efficiency
-than a throughput comparison alone would suggest:
-hashes per joule per kernel. RAPL domains cross-check as
-they should, package bounding core plus uncore.
+than a throughput comparison alone would suggest: hashes per joule per kernel.
+RAPL domains cross-check as they should, package bounding core plus
+uncore.
 
 Sources, all optional and all discovered at runtime:
 

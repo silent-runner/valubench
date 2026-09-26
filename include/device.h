@@ -58,6 +58,7 @@ typedef struct {
     char     pci[16];           /* "0000:01:00.0", or "" if unknown */
     int      pci_no_domain;     /* the API gave no PCI domain; 0 assumed */
     int      is_gpu;
+    int      is_cpu;            /* an OpenCL CPU device: the host hashing */
     unsigned compute_units;
     unsigned clock_mhz;
     size_t   max_work_group;

@@ -94,6 +94,9 @@ typedef struct {
     uint64_t start_uj;
     double   joules;        /* filled by vb_power_end */
     int      valid;
+
+    /* Measured hardware that did the hashing, by vb_power_attribute(). */
+    int      counted;
 } vb_power_src;
 
 typedef struct {
@@ -175,11 +178,30 @@ const char *vb_gpu_throttle_str(uint64_t mask, char *buf, size_t n);
 
 /*
  * Energy over the whole machine for the run: every non-contained domain, one
- * provider per scope. This is the denominator for hashes/joule, and it is not
- * the sum of the reported scopes -- an integrated GPU appears in the GPU scope
- * and inside the CPU package, and must be counted once.
+ * provider per scope. Not the sum of the reported scopes -- an integrated GPU
+ * appears in the GPU scope and inside the CPU package, and must be counted
+ * once. This was the hashes/joule denominator until 2026-09-26, and is still
+ * reported beside it so earlier captures can be compared.
  */
 double vb_power_total_joules(const vb_power *p);
+
+/*
+ * Mark the sources that measured the hardware that did the hashing, which is
+ * what hashes/joule divides by: the CPU package (and DRAM) when the CPU
+ * hashed -- a CPU kernel, or an OpenCL device that is the CPU -- and the GPU
+ * sources for the cards the run used, matched by PCI address. A card nothing
+ * identified is taken to be measured by the unidentified GPU sources, such as
+ * an integrated GPU's RAPL domain, rather than having its energy dropped.
+ *
+ * Before this, a device run divided by every card in the machine, and a CPU
+ * run on a box whose package counter was unreadable divided by an idle GPU.
+ */
+void vb_power_attribute(vb_power *p, int cpu_hashed,
+                        const char *const *gpu_pci, int n_gpu);
+
+/* The energy of the hardware that hashed, each domain once, or -1 when none
+   of it was measured. */
+double vb_power_hashing_joules(const vb_power *p);
 
 const char *vb_power_scope_name(vb_power_scope s);
 

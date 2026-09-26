@@ -583,7 +583,10 @@ static int duplicate_of_earlier(const vb_power *p, int i, vb_power_scope scope)
 
         if (j == i || o->scope != scope || !o->valid || !o->dev_id[0])
             continue;
-        if (strcmp(o->dev_id, s->dev_id) != 0)
+        /* Case-blind: NVML writes the hex of a PCI address in capitals and
+           sysfs in lower case, so "0000:A1:00.0" and "0000:a1:00.0" are one
+           card that a strcmp counted twice. */
+        if (strcasecmp(o->dev_id, s->dev_id) != 0)
             continue;
         if (o->provider < s->provider ||
             (o->provider == s->provider && j < i))
@@ -635,6 +638,78 @@ double vb_power_total_joules(const vb_power *p)
             total += s->joules;
             any = 1;
         }
+    }
+    return any ? total : -1.0;
+}
+
+static int same_device(const char *a, const char *b)
+{
+    return a && b && a[0] && b[0] && !strcasecmp(a, b);
+}
+
+void vb_power_attribute(vb_power *p, int cpu_hashed,
+                        const char *const *gpu_pci, int n_gpu)
+{
+    /* Does every card the run used have an identified source of its own? */
+    int unmatched = 0;
+    for (int g = 0; g < n_gpu; g++) {
+        int hit = 0;
+        for (int i = 0; i < p->n; i++)
+            if (p->src[i].scope == VB_PWR_GPU &&
+                same_device(p->src[i].dev_id, gpu_pci[g]))
+                hit = 1;
+        if (!hit)
+            unmatched = 1;
+    }
+
+    for (int i = 0; i < p->n; i++) {
+        vb_power_src *s = &p->src[i];
+        switch (s->scope) {
+        case VB_PWR_CPU_PACKAGE:
+        case VB_PWR_CPU_CORES:
+            s->counted = cpu_hashed;
+            break;
+        case VB_PWR_GPU:
+            if (s->dev_id[0]) {
+                s->counted = 0;
+                for (int g = 0; g < n_gpu; g++)
+                    if (same_device(s->dev_id, gpu_pci[g]))
+                        s->counted = 1;
+            } else {
+                s->counted = n_gpu > 0 && unmatched;
+            }
+            /* An integrated GPU's domain is inside the package: with the
+               package counted too it would be counted twice. */
+            if (s->contained && cpu_hashed)
+                s->counted = 0;
+            break;
+        default:
+            /* DRAM, outside the package, is part of what CPU hashing costs;
+               the whole-platform domain contains the package and never is. */
+            s->counted = cpu_hashed && !s->contained;
+            break;
+        }
+    }
+}
+
+double vb_power_hashing_joules(const vb_power *p)
+{
+    double total = 0.0;
+    int any = 0;
+
+    for (int i = 0; i < p->n; i++) {
+        const vb_power_src *s = &p->src[i];
+        if (!s->valid || !s->counted)
+            continue;
+        /* Cores are inside the package; a contained domain outside the GPU
+           scope is the whole platform. Neither is added. */
+        if (s->scope == VB_PWR_CPU_CORES ||
+            (s->contained && s->scope != VB_PWR_GPU))
+            continue;
+        if (duplicate_of_earlier(p, i, s->scope))
+            continue;
+        total += s->joules;
+        any = 1;
     }
     return any ? total : -1.0;
 }
