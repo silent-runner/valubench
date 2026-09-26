@@ -43,6 +43,12 @@ typedef struct {
     vb_CUdeviceptr d_corpus;
     vb_CUdeviceptr d_partial;
     void          *staging;           /* pinned host copy of the slice */
+
+    /* An imported OpenCL kernel takes its work-group scratch as a seventh,
+       pointer argument -- the shared-window address of the dynamic region,
+       which is what OpenCL's runtime passes for a __local argument. */
+    int                ocl_abi;
+    unsigned long long shared_base;
 } cu_impl;
 
 static void set_err(vb_dev_ctx *c, const char *fmt, ...)
@@ -173,6 +179,151 @@ static void dump_file(const char *dir, const char *name, const void *data,
     fclose(f);
 }
 
+/* ---- importing OpenCL's PTX -------------------------------------------- */
+
+/*
+ * NVIDIA's OpenCL compiler emits PTX, and the CUDA driver can run it once
+ * OpenCL's calling convention is translated -- which makes a 2x2 of frontend
+ * against runtime, and lets Nsight Compute, which sees only CUDA, profile the
+ * code OpenCL's compiler produced. The translation touches no hash code:
+ *
+ *   - kernel parameters carry OpenCL's state-space qualifiers (".ptr .global
+ *     .align 4"), which the CUDA loader rejects as an invalid image; they are
+ *     annotations, and the pointers are used as they are either way;
+ *   - OpenCL reads its launch environment from %envreg registers the CUDA
+ *     runtime never sets: %envreg0 and %envreg3 are the group and global
+ *     offsets, zero for any launch here, and %envreg6 is the group count,
+ *     which CUDA calls %nctaid.x. Any other %envreg is refused, not guessed;
+ *   - the __local scratch argument stays, and the launch passes it the
+ *     address of the dynamic shared region.
+ *
+ * Checked on an RTX PRO 2000 against NVRTC's kernel on the same data before
+ * it was trusted, and the checksum gate checks it on every run after.
+ */
+static char *ocl_ptx_to_cuda(const char *in, int *ocl_abi, char *err,
+                             size_t errn)
+{
+    size_t n = strlen(in);
+    char *out = malloc(n + 64 * 1024);
+    if (!out) {
+        snprintf(err, errn, "out of memory");
+        return NULL;
+    }
+    size_t o = 0;
+    *ocl_abi = strstr(in, ".ptr .shared") != NULL;
+
+    for (const char *p = in; *p; ) {
+        if (!strncmp(p, " .ptr .", 7)) {
+            /* " .ptr .<space> .align <n>" -- drop it. */
+            const char *q = strstr(p, ".align ");
+            if (q && q - p < 32) {
+                q += 7;
+                while (*q >= '0' && *q <= '9')
+                    q++;
+                p = q;
+                continue;
+            }
+        }
+        if (!strncmp(p, "%envreg", 7)) {
+            int reg = atoi(p + 7);
+            const char *rest = p + 7;
+            while (*rest >= '0' && *rest <= '9')
+                rest++;
+            const char *with = NULL;
+            if (reg == 0 || reg == 3)
+                with = "0";
+            else if (reg == 6)
+                with = "%nctaid.x";
+            if (!with) {
+                snprintf(err, errn, "the PTX reads %%envreg%d, which has no "
+                         "CUDA equivalent here", reg);
+                free(out);
+                return NULL;
+            }
+            /* mov.b32 from a special register wants the .u32 spelling. */
+            if (reg == 6 && o >= 16) {
+                char *mv = NULL;
+                for (size_t k = o; k > 0 && out[k - 1] != '\n'; k--)
+                    if (!strncmp(out + k - 1, "mov.b32", 7))
+                        mv = out + k - 1;
+                if (mv)
+                    memcpy(mv, "mov.u32", 7);
+            }
+            size_t wl = strlen(with);
+            memcpy(out + o, with, wl);
+            o += wl;
+            p = rest;
+            continue;
+        }
+        out[o++] = *p++;
+    }
+    out[o] = '\0';
+    return out;
+}
+
+/* Where the dynamic shared region starts in the shared window: the value
+   OpenCL's runtime passes for a __local argument. Not zero -- recent parts
+   reserve the first kilobyte -- so it is asked of the device. */
+static int shared_base(vb_dev_ctx *c, const char *version_line,
+                       unsigned long long *out)
+{
+    const vb_cuda *cu = vb_cuda_api();
+    char ptx[640];
+    snprintf(ptx, sizeof ptx,
+             "%s\n.target %s\n.address_size 64\n"
+             ".extern .shared .align 16 .b8 vb_dyn[];\n"
+             ".visible .entry vb_shared_base(.param .u64 out)\n{\n"
+             "\t.reg .b64 %%rd<3>;\n\tld.param.u64 %%rd1, [out];\n"
+             "\tmov.u64 %%rd2, vb_dyn;\n\tst.global.u64 [%%rd1], %%rd2;\n"
+             "\tret;\n}\n", version_line, c->dev.arch);
+    vb_CUmodule mod = NULL;
+    vb_CUfunction fn = NULL;
+    vb_CUdeviceptr d = 0;
+    vb_CUresult r = cu->ModuleLoadDataEx(&mod, ptx, 0, NULL, NULL);
+    if (r == VB_CUDA_SUCCESS)
+        r = cu->ModuleGetFunction(&fn, mod, "vb_shared_base");
+    if (r == VB_CUDA_SUCCESS)
+        r = cu->MemAlloc(&d, 8);
+    void *args[1] = { &d };
+    if (r == VB_CUDA_SUCCESS)
+        r = cu->LaunchKernel(fn, 1, 1, 1, 1, 1, 1, 16, NULL, args, NULL);
+    if (r == VB_CUDA_SUCCESS)
+        r = cu->MemcpyDtoHAsync(out, d, 8, NULL);
+    if (r == VB_CUDA_SUCCESS)
+        r = cu->StreamSynchronize(NULL);
+    if (d)
+        cu->MemFree(d);
+    if (mod)
+        cu->ModuleUnload(mod);
+    if (r != VB_CUDA_SUCCESS) {
+        set_err(c, "finding the shared-memory base: %s", vb_cuda_strerror(r));
+        return -1;
+    }
+    return 0;
+}
+
+static char *read_file(const char *path, char *err, size_t errn)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        snprintf(err, errn, "cannot read %s", path);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    rewind(f);
+    char *buf = n >= 0 ? malloc((size_t) n + 1) : NULL;
+    if (!buf || fread(buf, 1, (size_t) n, f) != (size_t) n) {
+        snprintf(err, errn, "cannot read %s", path);
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
 /* NVRTC takes options as an argv, so split the device layer's -D string. */
 static int split_options(char *buf, const char **argv, int max)
 {
@@ -204,72 +355,104 @@ static int cu_build(vb_dev_ctx *c, const char *source, const char *entry,
     if (enter(c) != 0)
         return -1;
 
-    int cubin = o->compile_mode == VB_COMPILE_CUBIN;
+    int cubin = o->compile_mode == VB_COMPILE_CUBIN && !o->import_ptx;
     const char *sm = c->dev.arch[0] ? c->dev.arch + 3 : "";   /* "120" */
+    char opts_buf[512] = "";
+    size_t bin_len = 0;
+    char *ptx = NULL, *bin = NULL, *log = NULL;
 
-    char opts_buf[512], arch_opt[48];
-    snprintf(arch_opt, sizeof arch_opt, "--gpu-architecture=%s_%s",
-             cubin ? "sm" : "compute", sm);
-    snprintf(opts_buf, sizeof opts_buf, "%s %s", arch_opt, defines);
-    char opts_copy[512];
-    memcpy(opts_copy, opts_buf, sizeof opts_copy);
-    const char *argv[32];
-    int argc = split_options(opts_copy, argv, 32);
-
-    snprintf(c->compiler, sizeof c->compiler, "nvrtc");
     snprintf(c->compile_mode, sizeof c->compile_mode, "%s",
              cubin ? "cubin" : "ptx-jit");
 
-    char name[96];
-    snprintf(name, sizeof name, "%s.cu", c->label);
-    vb_nvrtcProgram prog = NULL;
-    if (cu->nvrtcCreateProgram(&prog, source, name, 0, NULL, NULL)
-        != VB_NVRTC_SUCCESS) {
-        set_err(c, "nvrtcCreateProgram failed");
-        return -1;
-    }
-    vb_nvrtcResult nr = cu->nvrtcCompileProgram(prog, argc, argv);
-
-    size_t log_len = 0;
-    cu->nvrtcGetProgramLogSize(prog, &log_len);
-    char *log = calloc(1, log_len + 1);
-    if (log && log_len)
-        cu->nvrtcGetProgramLog(prog, log);
-
-    if (nr != VB_NVRTC_SUCCESS) {
-        set_err(c, "NVRTC %d.%d could not compile for %s (%s): %.300s",
-                cu->nvrtc_major, cu->nvrtc_minor, c->dev.arch,
-                cu->nvrtcGetErrorString(nr), log ? log : "");
-        free(log);
-        cu->nvrtcDestroyProgram(&prog);
-        return -1;
-    }
-
-    /* PTX in both modes: it is what ptx-jit loads, and in cubin mode it is
-       still the frontend's output worth dumping and naming. */
-    size_t ptx_len = 0, bin_len = 0;
-    char *ptx = NULL, *bin = NULL;
-    if (cu->nvrtcGetPTXSize(prog, &ptx_len) == VB_NVRTC_SUCCESS && ptx_len) {
-        ptx = malloc(ptx_len);
-        if (ptx)
-            cu->nvrtcGetPTX(prog, ptx);
-    }
-    if (cubin && cu->nvrtcGetCUBINSize(prog, &bin_len) == VB_NVRTC_SUCCESS &&
-        bin_len) {
-        bin = malloc(bin_len);
-        if (bin)
-            cu->nvrtcGetCUBIN(prog, bin);
-    }
-    cu->nvrtcDestroyProgram(&prog);
-
-    const char *nvvm = ptx ? strstr(ptx, "Based on NVVM ") : NULL;
-    if (nvvm)
+    if (o->import_ptx) {
+        /* Someone else's PTX -- in practice NVIDIA's OpenCL compiler's, from
+           --dump-device-code -- finished by the driver as ptx-jit is. */
+        char err[256];
+        char *raw = read_file(o->import_ptx, err, sizeof err);
+        if (!raw) {
+            set_err(c, "--import-ptx: %s", err);
+            return -1;
+        }
+        ptx = ocl_ptx_to_cuda(raw, &m->ocl_abi, err, sizeof err);
+        free(raw);
+        if (!ptx) {
+            set_err(c, "--import-ptx %s: %s", o->import_ptx, err);
+            return -1;
+        }
+        const char *base = strrchr(o->import_ptx, '/');
+        base = base ? base + 1 : o->import_ptx;
+        const char *nvvm = strstr(ptx, "Based on NVVM ");
+        snprintf(c->compiler, sizeof c->compiler, "imported");
+        /* Whatever steers the importer compiled in, not this run's. */
+        snprintf(c->steers, sizeof c->steers, "imported");
         snprintf(c->compiler_version, sizeof c->compiler_version,
-                 "%d.%d (%.*s)", cu->nvrtc_major, cu->nvrtc_minor,
-                 (int) strcspn(nvvm + 9, "\r\n"), nvvm + 9);
-    else
-        snprintf(c->compiler_version, sizeof c->compiler_version, "%d.%d",
-                 cu->nvrtc_major, cu->nvrtc_minor);
+                 "%.*s from %.60s",
+                 nvvm ? (int) strcspn(nvvm + 9, "\r\n") : 7,
+                 nvvm ? nvvm + 9 : "unknown", base);
+        snprintf(opts_buf, sizeof opts_buf, "imported from %s", o->import_ptx);
+    } else {
+        char arch_opt[48];
+        snprintf(arch_opt, sizeof arch_opt, "--gpu-architecture=%s_%s",
+                 cubin ? "sm" : "compute", sm);
+        snprintf(opts_buf, sizeof opts_buf, "%s %s", arch_opt, defines);
+        char opts_copy[512];
+        memcpy(opts_copy, opts_buf, sizeof opts_copy);
+        const char *argv[32];
+        int argc = split_options(opts_copy, argv, 32);
+
+        snprintf(c->compiler, sizeof c->compiler, "nvrtc");
+
+        char name[96];
+        snprintf(name, sizeof name, "%s.cu", c->label);
+        vb_nvrtcProgram prog = NULL;
+        if (cu->nvrtcCreateProgram(&prog, source, name, 0, NULL, NULL)
+            != VB_NVRTC_SUCCESS) {
+            set_err(c, "nvrtcCreateProgram failed");
+            return -1;
+        }
+        vb_nvrtcResult nr = cu->nvrtcCompileProgram(prog, argc, argv);
+
+        size_t log_len = 0;
+        cu->nvrtcGetProgramLogSize(prog, &log_len);
+        log = calloc(1, log_len + 1);
+        if (log && log_len)
+            cu->nvrtcGetProgramLog(prog, log);
+
+        if (nr != VB_NVRTC_SUCCESS) {
+            set_err(c, "NVRTC %d.%d could not compile for %s (%s): %.300s",
+                    cu->nvrtc_major, cu->nvrtc_minor, c->dev.arch,
+                    cu->nvrtcGetErrorString(nr), log ? log : "");
+            free(log);
+            cu->nvrtcDestroyProgram(&prog);
+            return -1;
+        }
+
+        /* PTX in both modes: it is what ptx-jit loads, and in cubin mode it
+           is still the frontend's output worth dumping and naming. */
+        size_t ptx_len = 0;
+        if (cu->nvrtcGetPTXSize(prog, &ptx_len) == VB_NVRTC_SUCCESS &&
+            ptx_len) {
+            ptx = malloc(ptx_len);
+            if (ptx)
+                cu->nvrtcGetPTX(prog, ptx);
+        }
+        if (cubin && cu->nvrtcGetCUBINSize(prog, &bin_len) == VB_NVRTC_SUCCESS
+            && bin_len) {
+            bin = malloc(bin_len);
+            if (bin)
+                cu->nvrtcGetCUBIN(prog, bin);
+        }
+        cu->nvrtcDestroyProgram(&prog);
+
+        const char *nvvm = ptx ? strstr(ptx, "Based on NVVM ") : NULL;
+        if (nvvm)
+            snprintf(c->compiler_version, sizeof c->compiler_version,
+                     "%d.%d (%.*s)", cu->nvrtc_major, cu->nvrtc_minor,
+                     (int) strcspn(nvvm + 9, "\r\n"), nvvm + 9);
+        else
+            snprintf(c->compiler_version, sizeof c->compiler_version,
+                     "%d.%d", cu->nvrtc_major, cu->nvrtc_minor);
+    }
 
     const void *image = cubin ? (const void *) bin : (const void *) ptx;
     if (!image) {
@@ -316,20 +499,35 @@ static int cu_build(vb_dev_ctx *c, const char *source, const char *entry,
         free(log);
         return -1;
     }
+    if (m->ocl_abi) {
+        char version[32] = ".version 8.7";
+        const char *v = strstr(ptx, ".version ");
+        if (v)
+            snprintf(version, sizeof version, "%.*s",
+                     (int) strcspn(v, "\r\n"), v);
+        if (shared_base(c, version, &m->shared_base) != 0) {
+            free(ptx);
+            free(bin);
+            free(log);
+            return -1;
+        }
+    }
 
     if (o->dump_dir) {
         char fname[256];
-        snprintf(fname, sizeof fname, "%s.cuda-%s.d%d.cu", c->label,
-                 c->compile_mode, c->dev.ordinal);
-        dump_file(o->dump_dir, fname, source, strlen(source));
+        const char *mode = o->import_ptx ? "import" : c->compile_mode;
+        snprintf(fname, sizeof fname, "%s.cuda-%s.d%d.cu", c->label, mode,
+                 c->dev.ordinal);
+        if (!o->import_ptx)
+            dump_file(o->dump_dir, fname, source, strlen(source));
         if (ptx) {
             snprintf(fname, sizeof fname, "%s.cuda-%s.d%d.ptx", c->label,
-                     c->compile_mode, c->dev.ordinal);
+                     mode, c->dev.ordinal);
             dump_file(o->dump_dir, fname, ptx, strlen(ptx));
         }
         if (bin) {
             snprintf(fname, sizeof fname, "%s.cuda-%s.d%d.cubin", c->label,
-                     c->compile_mode, c->dev.ordinal);
+                     mode, c->dev.ordinal);
             dump_file(o->dump_dir, fname, bin, bin_len);
         }
         int regs = 0, local = 0;
@@ -341,14 +539,15 @@ static int cu_build(vb_dev_ctx *c, const char *source, const char *entry,
         char *text = malloc(cap);
         if (text) {
             int k = snprintf(text, cap,
-                             "options: %s\ncompiler: nvrtc %s\n"
+                             "options: %s\ncompiler: %s %s\n"
                              "registers: %d, local memory: %d bytes\n\n"
                              "nvrtc log:\n%s\n\ndriver JIT log:\n%s\n",
-                             opts_buf, c->compiler_version, regs, local,
+                             opts_buf, c->compiler, c->compiler_version,
+                             regs, local,
                              log ? log : "", info);
             if (k > 0) {
                 snprintf(fname, sizeof fname, "%s.cuda-%s.d%d.log", c->label,
-                         c->compile_mode, c->dev.ordinal);
+                         mode, c->dev.ordinal);
                 dump_file(o->dump_dir, fname, text,
                           (size_t) k < cap ? (size_t) k : cap - 1);
             }
@@ -447,8 +646,8 @@ static int cu_launch(vb_dev_ctx *c, uint32_t iterations, size_t shared)
     /* The parameter list the core's signature declares; the work-group
        scratch is dynamic shared memory rather than an argument. */
     unsigned long long groups = c->n_groups;
-    void *args[6] = { &m->d_corpus, &c->blocks, &iterations, &groups,
-                      &c->repeats, &m->d_partial };
+    void *args[7] = { &m->d_corpus, &c->blocks, &iterations, &groups,
+                      &c->repeats, &m->d_partial, &m->shared_base };
 
     unsigned grid = (unsigned) (c->global_size / c->local_size);
     CU_CHECK(c, cu->EventRecord(m->k0, m->stream), "cuEventRecord");

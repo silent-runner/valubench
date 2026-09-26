@@ -201,6 +201,7 @@ typedef struct {
     size_t   pin_local;
     vb_compile_mode compile_mode;  /* --compile-mode, CUDA only */
     int      compile_mode_given;
+    const char *import_ptx;        /* --import-ptx, CUDA only */
     /* --backend: the device APIs autotune may pick from, one bit per
        vb_backend_id; 0 means every one, and CPU kernels too. Naming any
        restricts autotune to device kernels from those APIs. Selection among APIs is by

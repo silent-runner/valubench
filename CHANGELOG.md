@@ -50,6 +50,12 @@ outside this repository while a durable format for them is decided.
   (`cubin`). Autotune weighs CUDA and OpenCL kernels by measurement;
   `--backend` restricts it to one API. CI compiles every kernel's CUDA
   spelling with NVRTC from its pip wheel, without a GPU.
+- **`--import-ptx FILE`** runs a CUDA kernel from a PTX file instead of
+  compiling it -- in practice what NVIDIA's OpenCL compiler produced, dumped
+  with `--dump-device-code`. OpenCL's calling convention is translated on the
+  way in, the hash code untouched, so one card compares compilers under one
+  runtime and runtimes under one compiler, and Nsight Compute can profile the
+  code OpenCL's compiler made.
 - **`--device-geometry GLOBAL,LOCAL`** pins the device launch instead of
   tuning it, and refuses one the kernel cannot use. The tuner picks by short
   probes and can land differently between identical runs; comparing two

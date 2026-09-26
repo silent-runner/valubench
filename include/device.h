@@ -99,6 +99,7 @@ typedef struct {
     size_t          pin_local;
     uint32_t        iterations;   /* the count being measured */
     vb_compile_mode compile_mode; /* CUDA only */
+    const char     *import_ptx;   /* CUDA only: load this PTX, don't compile */
 } vb_dev_options;
 
 void vb_dev_options_default(vb_dev_options *o);

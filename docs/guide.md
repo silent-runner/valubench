@@ -257,6 +257,22 @@ instruction sets: every available device kernel competes. `--backend cuda` or
 `--backend opencl` restricts it to one API's device kernels -- a fixed
 preference would build the answer to "which API is faster here" into the tool.
 
+**Separating the compiler from the runtime.** NVIDIA's OpenCL compiler emits
+PTX, and `--import-ptx` runs such a file through CUDA instead of compiling:
+
+```
+$ valubench --kernel md5/ocl-s1 --dump-device-code dump
+$ valubench --kernel md5/cuda-s1 --import-ptx dump/md5-s1.opencl.d0.ptx
+  compiled    cuda: imported, NVVM 7.0.1 from md5-s1.opencl.d0.ptx (ptx-jit)
+```
+
+OpenCL's calling convention is translated on the way in -- nothing in the hash
+code changes -- and the checksum still gates the run. With it, one card gives a
+comparison of frontends under one runtime (imported against `cuda-s1`) and of
+runtimes under one frontend (imported against `ocl-s1`). It also lets Nsight
+Compute, which profiles CUDA and not OpenCL, see the code OpenCL's compiler
+produced.
+
 To compare the two properly, pin the launch so both run the same geometry, and
 let `sweep.py` interleave them so clock drift does not land on one side:
 
