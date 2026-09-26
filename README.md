@@ -210,9 +210,6 @@ Known gaps, in the order they matter:
   uploads from pinned memory by default; captures taken before that read
   pageable memory, which reached roughly half the link rate on an A10.
   `--host-memory pageable` reproduces them.
-- **Overlapped transfer and compute.** Streaming uploads then launches, in
-  order. The reported ratio already answers the pipelined question, so this
-  concerns achieved throughput rather than correctness of the ratio.
 - **Nothing pins the toolchain, and the toolchain is the largest effect in the
   project.** Across four compilers on one part and one instruction set, the
   spread is several times larger than any instruction-set choice measured

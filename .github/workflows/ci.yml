@@ -367,6 +367,15 @@ jobs:
           ./build/valubench --kernel md5/ocl-s2 --device 0 \
             --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
 
+      - name: the pipelined upload must verify, pass by pass
+        run: |
+          set -e
+          for k in md5/ocl-s1 sha512/ocl-s2; do
+            ./build/valubench --kernel $k --transfer overlap --pipeline-chunks 3 \
+              --working-set-kb 4096 --samples 2 --time-ms 50 --warmup-ms 50 \
+              | grep -q "verified    yes"
+          done
+
       - name: pinned geometry, neutral primitives and dumped code must verify
         run: |
           set -e

@@ -246,5 +246,6 @@ typedef cl_int (CL_API_CALL *cl_fn_EnqueueNDRangeKernel)(
 typedef cl_int (CL_API_CALL *cl_fn_GetEventProfilingInfo)(
     cl_event, cl_profiling_info, size_t, void *, size_t *);
 typedef cl_int (CL_API_CALL *cl_fn_ReleaseEvent)(cl_event);
+typedef cl_int (CL_API_CALL *cl_fn_WaitForEvents)(cl_uint, const cl_event *);
 
 #endif /* VALUBENCH_VB_CL_H */

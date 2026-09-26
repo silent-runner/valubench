@@ -36,6 +36,17 @@ typedef struct {
     void            *staging;     /* its mapped pointer */
     cl_event         event;       /* in-flight launch */
     cl_event         xfer_event;  /* in-flight upload, streaming only */
+
+    /* Pipelined streaming: uploads on their own queue, since an in-order
+       queue would run them strictly between kernels. */
+    cl_command_queue copy_queue;
+    cl_mem           pbuf[2];     /* chunk buffers, alternating */
+    cl_mem           ppart[2];    /* their partials */
+    cl_mem           h_ring;      /* pinned readback ring, mapped */
+    unsigned char   *ring;
+    int              ring_mapped;
+    size_t           ring_slot;
+    cl_event         up[VB_PIPE_RING], kev[VB_PIPE_RING], rd[VB_PIPE_RING];
 } ocl_impl;
 
 static void set_err(vb_dev_ctx *c, const char *fmt, ...)
@@ -447,6 +458,145 @@ static int ocl_read(vb_dev_ctx *c, size_t bytes)
     return 0;
 }
 
+/* ---- pipelined streaming ------------------------------------------------ */
+
+static int ocl_pipe_open(vb_dev_ctx *c, size_t chunk_bytes, size_t read_bytes)
+{
+    const vb_ocl *cl = vb_ocl_api();
+    ocl_impl *m = c->impl;
+    cl_int err;
+
+    m->copy_queue = cl->CreateCommandQueue(m->context, m->device,
+                                           CL_QUEUE_PROFILING_ENABLE, &err);
+    if (!m->copy_queue) {
+        set_err(c, "second command queue: %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    for (int b = 0; b < 2; b++) {
+        m->pbuf[b] = cl->CreateBuffer(m->context, CL_MEM_READ_ONLY, chunk_bytes,
+                                      NULL, &err);
+        if (!m->pbuf[b]) {
+            set_err(c, "chunk buffer (%.1f MiB): %s",
+                    (double) chunk_bytes / 1048576.0, vb_ocl_strerror(err));
+            return -1;
+        }
+        m->ppart[b] = cl->CreateBuffer(m->context, CL_MEM_WRITE_ONLY, read_bytes,
+                                       NULL, &err);
+        if (!m->ppart[b]) {
+            set_err(c, "chunk partial buffer: %s", vb_ocl_strerror(err));
+            return -1;
+        }
+    }
+
+    /* The readbacks land in pinned memory too: a non-blocking read into
+       pageable memory can stall the host until it completes, and the host
+       is what keeps the queues fed. Pageable if pinning is refused. */
+    m->ring_slot = read_bytes;
+    m->h_ring = cl->CreateBuffer(m->context,
+                                 CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                 VB_PIPE_RING * read_bytes, NULL, &err);
+    if (m->h_ring)
+        m->ring = cl->EnqueueMapBuffer(m->queue, m->h_ring, CL_TRUE,
+                                       CL_MAP_READ | CL_MAP_WRITE, 0,
+                                       VB_PIPE_RING * read_bytes, 0, NULL, NULL,
+                                       &err);
+    if (m->ring) {
+        m->ring_mapped = 1;
+    } else {
+        if (m->h_ring)
+            cl->ReleaseMemObject(m->h_ring);
+        m->h_ring = NULL;
+        m->ring = malloc(VB_PIPE_RING * read_bytes);
+        if (!m->ring) {
+            set_err(c, "out of memory for the readback ring");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int ocl_pipe_enqueue(vb_dev_ctx *c, uint64_t seq, size_t offset,
+                            size_t bytes, uint64_t n_groups,
+                            uint32_t iterations, size_t shared,
+                            size_t read_bytes)
+{
+    const vb_ocl *cl = vb_ocl_api();
+    ocl_impl *m = c->impl;
+    cl_int err;
+    unsigned i = (unsigned) (seq % VB_PIPE_RING);
+    int b = (int) (seq % 2);
+
+    /* The buffer's previous user is chunk seq - 2: its kernel must be done
+       reading before the upload overwrites it. */
+    const unsigned char *src = (const unsigned char *)
+        (m->staging ? m->staging : c->host_slice) + offset;
+    cl_event wait_kernel[1];
+    cl_uint n_wait = 0;
+    if (seq >= 2)
+        wait_kernel[n_wait++] = m->kev[(seq - 2) % VB_PIPE_RING];
+    err = cl->EnqueueWriteBuffer(m->copy_queue, m->pbuf[b], CL_FALSE, 0, bytes,
+                                 (void *) (uintptr_t) src, n_wait,
+                                 n_wait ? wait_kernel : NULL, &m->up[i]);
+    if (err != CL_SUCCESS) {
+        set_err(c, "chunk upload: %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    cl->Flush(m->copy_queue);
+
+    /* Arguments are captured when the kernel is enqueued, so resetting them
+       for the next chunk is safe while this one waits. */
+    cl_uint a = 0;
+    cl_ulong groups = n_groups;
+    err  = cl->SetKernelArg(m->kernel, a++, sizeof m->pbuf[b], &m->pbuf[b]);
+    err |= cl->SetKernelArg(m->kernel, a++, sizeof(cl_uint), &c->blocks);
+    err |= cl->SetKernelArg(m->kernel, a++, sizeof(cl_uint), &iterations);
+    err |= cl->SetKernelArg(m->kernel, a++, sizeof groups, &groups);
+    err |= cl->SetKernelArg(m->kernel, a++, sizeof(cl_uint), &c->repeats);
+    err |= cl->SetKernelArg(m->kernel, a++, sizeof m->ppart[b], &m->ppart[b]);
+    err |= cl->SetKernelArg(m->kernel, a++, shared, NULL);
+    if (err != CL_SUCCESS) {
+        set_err(c, "clSetKernelArg: %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    size_t global = c->global_size, local = c->local_size;
+    err = cl->EnqueueNDRangeKernel(m->queue, m->kernel, 1, NULL, &global,
+                                   &local, 1, &m->up[i], &m->kev[i]);
+    if (err != CL_SUCCESS) {
+        set_err(c, "clEnqueueNDRangeKernel (chunk): %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    err = cl->EnqueueReadBuffer(m->queue, m->ppart[b], CL_FALSE, 0, read_bytes,
+                                m->ring + (size_t) i * m->ring_slot, 0, NULL,
+                                &m->rd[i]);
+    if (err != CL_SUCCESS) {
+        set_err(c, "reading chunk partials: %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    cl->Flush(m->queue);
+    return 0;
+}
+
+static int ocl_pipe_wait(vb_dev_ctx *c, uint64_t seq, const void **partials,
+                         uint64_t *kernel_ns, uint64_t *transfer_ns)
+{
+    const vb_ocl *cl = vb_ocl_api();
+    ocl_impl *m = c->impl;
+    unsigned i = (unsigned) (seq % VB_PIPE_RING);
+
+    cl_int err = cl->WaitForEvents(1, &m->rd[i]);
+    if (err != CL_SUCCESS) {
+        set_err(c, "waiting for chunk %llu: %s", (unsigned long long) seq,
+                vb_ocl_strerror(err));
+        return -1;
+    }
+    cl->ReleaseEvent(m->rd[i]);
+    m->rd[i] = NULL;
+    *kernel_ns = event_ns(cl, &m->kev[i]);
+    *transfer_ns = event_ns(cl, &m->up[i]);
+    *partials = m->ring + (size_t) i * m->ring_slot;
+    return 0;
+}
+
 static void ocl_destroy(vb_dev_ctx *c)
 {
     const vb_ocl *cl = vb_ocl_api();
@@ -454,6 +604,28 @@ static void ocl_destroy(vb_dev_ctx *c)
     if (!m)
         return;
     if (cl) {
+        if (m->copy_queue)
+            cl->Finish(m->copy_queue);
+        if (m->queue)
+            cl->Finish(m->queue);
+        for (int i = 0; i < VB_PIPE_RING; i++) {
+            if (m->up[i])  cl->ReleaseEvent(m->up[i]);
+            if (m->kev[i]) cl->ReleaseEvent(m->kev[i]);
+            if (m->rd[i])  cl->ReleaseEvent(m->rd[i]);
+        }
+        if (m->ring_mapped && m->queue) {
+            cl->EnqueueUnmapMemObject(m->queue, m->h_ring, m->ring, 0, NULL,
+                                      NULL);
+            cl->Finish(m->queue);
+        } else if (!m->ring_mapped) {
+            free(m->ring);
+        }
+        if (m->h_ring)     cl->ReleaseMemObject(m->h_ring);
+        for (int b = 0; b < 2; b++) {
+            if (m->pbuf[b])  cl->ReleaseMemObject(m->pbuf[b]);
+            if (m->ppart[b]) cl->ReleaseMemObject(m->ppart[b]);
+        }
+        if (m->copy_queue) cl->ReleaseCommandQueue(m->copy_queue);
         if (m->event)      cl->ReleaseEvent(m->event);
         if (m->xfer_event) cl->ReleaseEvent(m->xfer_event);
         if (m->staging && m->queue) {
@@ -485,5 +657,8 @@ const vb_dev_backend vb_opencl_backend = {
     .pin_staging = ocl_pin_staging,
     .launch      = ocl_launch,
     .read        = ocl_read,
+    .pipe_open   = ocl_pipe_open,
+    .pipe_enqueue = ocl_pipe_enqueue,
+    .pipe_wait   = ocl_pipe_wait,
     .destroy     = ocl_destroy,
 };

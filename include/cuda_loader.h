@@ -56,6 +56,8 @@ typedef struct {
     cu_fn_EventDestroy             EventDestroy;
     cu_fn_EventRecord              EventRecord;
     cu_fn_EventElapsedTime         EventElapsedTime;
+    cu_fn_EventSynchronize         EventSynchronize;
+    cu_fn_StreamWaitEvent          StreamWaitEvent;
     cu_fn_LaunchKernel             LaunchKernel;
     cu_fn_GetErrorName             GetErrorName;        /* optional */
 

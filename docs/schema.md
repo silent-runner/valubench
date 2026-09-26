@@ -36,7 +36,7 @@ The version number moves when a field is removed or its meaning changes.
 | `result` | `unit`, `direction`, `median`, `min`, `max`, `mean`, `stddev`, `cov_percent`, `stable`, `cov_threshold_percent`, `message_bytes_per_second`, `compressions_per_second`, `samples`, `total_hashes`, `total_seconds` |
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
-| `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode `host_memory` and the per-pass transfer figures |
+| `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `kernel_busy_fraction`, `transfer_mode` (`resident`, `stream` or `overlap`), with `overlap` also `pipeline_chunks` and `overlap_efficiency`, and in either streaming mode `host_memory` and the per-pass transfer figures |
 | `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the figures: `cpu_package_joules`/`watts`, `gpu_joules`/`watts`, `hashing_joules`/`watts` and `hashes_per_joule` (or `hashing_unmeasured`), `machine_joules` and `hashes_per_joule_machine`, and `sources`, each with `counted` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
@@ -171,8 +171,8 @@ to append to a file whose header differs rather than mixing two shapes.
 Three columns are worth knowing:
 
 **`point_id`** encodes what was *requested* — algorithm, kernel, where,
-transfer, host memory, primitives, compile mode, device geometry, message
-bytes, iterations, working set, threads. `--resume` matches on
+transfer, host memory, pipeline chunks, primitives, compile mode, device
+geometry, message bytes, iterations, working set, threads. `--resume` matches on
 it. It exists because requests cannot be recovered from results: `transfer_mode`
 comes back empty for CPU kernels whatever was asked for, and `kernel` comes back
 as autotune's choice where the request was "pick one".
@@ -192,7 +192,8 @@ hash.
 `backend`, `device_compiler`, `device_compiler_version`, `compile_mode`,
 `device_driver`, `platform`, `pci_address`, `primitives`, `steers`,
 `geometry_source`, `global_work`, `local_work`, `sweeps_per_launch`,
-`transfer_mode`, `host_memory`, `kernel_busy_pct`, `transfer_busy_pct`,
+`transfer_mode`, `host_memory`, `pipeline_chunks`, `overlap_efficiency`,
+`kernel_busy_pct`, `transfer_busy_pct`,
 `transfer_gbytes_per_sec`, `compute_transfer_ratio` and `bound_by` all describe
 a host-to-device transfer, and a CPU kernel reads the corpus out of the memory
 it is already running in. The CSV always carries the columns so that CPU and

@@ -105,6 +105,7 @@ void vb_config_defaults(vb_config *cfg)
     cfg->device_count   = 0;   /* every device */
     cfg->transfer       = VB_TRANSFER_RESIDENT;
     cfg->host_memory    = VB_HOST_PINNED;
+    cfg->pipeline_chunks = 4;
     cfg->where          = VB_WHERE_ANY;
     cfg->cov_threshold  = 3.5;  /* same spirit as the PTS default, RESEARCH 1.2 */
     cfg->pin_cpu        = 1;
@@ -714,6 +715,45 @@ static uint64_t calibrate_reps(vb_pool *p, unsigned target_ms)
  * and one host thread drives the queue. Threads-in-flight is a device-side
  * property here (work-items), not a host one, so `threads` is reported as 1.
  */
+/*
+ * `passes` passes through every device's pipeline, each checked against the
+ * single-pass checksum. 0; 1 if a pass computed something else, which lands
+ * in `bad`; -1 if the pipeline could not run.
+ */
+static int pipe_passes(vb_dev_ctx *ctx, int n, const vb_config *cfg,
+                       uint64_t passes,
+                       const uint64_t expected[VB_MAX_DIGEST_WORDS],
+                       uint64_t bad[VB_MAX_DIGEST_WORDS],
+                       uint64_t *kernel_ns, uint64_t *transfer_ns)
+{
+    uint64_t (*got)[VB_MAX_DIGEST_WORDS] = malloc((size_t) passes * sizeof *got);
+    if (!got) {
+        snprintf(ctx[0].error, sizeof ctx[0].error,
+                 "out of memory for %llu pass checksums",
+                 (unsigned long long) passes);
+        return -1;
+    }
+    int rc = 0;
+    if (vb_dev_pipe_run(ctx, n, cfg->iterations, passes, got, kernel_ns,
+                        transfer_ns) != 0) {
+        rc = -1;
+        /* The context that failed has the reason; surface it on the first,
+           which is where the caller looks. */
+        for (int i = 1; i < n && !ctx[0].error[0]; i++)
+            if (ctx[i].error[0])
+                memcpy(ctx[0].error, ctx[i].error, sizeof ctx[0].error);
+    } else {
+        for (uint64_t p = 0; p < passes; p++)
+            if (memcmp(got[p], expected, sizeof got[p]) != 0) {
+                memcpy(bad, got[p], sizeof got[p]);
+                rc = 1;
+                break;
+            }
+    }
+    free(got);
+    return rc;
+}
+
 static int measure_device(const vb_kernel *k, const vb_config *cfg,
                           const vb_corpus *corpus, vb_result *out)
 {
@@ -804,8 +844,19 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
             goto fail_init;
         }
         n_init++;
-        vb_dev_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM,
-                              cfg->host_memory == VB_HOST_PINNED);
+        if (cfg->transfer == VB_TRANSFER_OVERLAP) {
+            if (vb_dev_ctx_set_overlap(&ctx[i], cfg->pipeline_chunks,
+                                       cfg->host_memory == VB_HOST_PINNED)
+                != 0) {
+                snprintf(out->device_error, sizeof out->device_error, "%s",
+                         ctx[i].error);
+                goto fail_run;
+            }
+        } else {
+            vb_dev_ctx_set_stream(&ctx[i],
+                                  cfg->transfer == VB_TRANSFER_STREAM,
+                                  cfg->host_memory == VB_HOST_PINNED);
+        }
 
         /* Parallel, like the other two paths. This is the one that hurt: a
            device crossover sweep verifies iterations x messages of scalar
@@ -921,11 +972,33 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     const double floor_ns = target_ns / 4.0;
     uint64_t reps = 1;
 
+    /*
+     * Pipelined, a rep is a pass through the pipeline and a run of them is
+     * one continuous stream, so it is timed and checked as a whole: every
+     * pass must match, and a wrong one is a wrong answer like any other.
+     */
+    const int pipelined = cfg->transfer == VB_TRANSFER_OVERLAP;
+    uint64_t pk = 0, pt = 0;
+    #define VB_DEV_PIPE(count)                                             \
+        do {                                                               \
+            int prc_ = pipe_passes(ctx, n_use, cfg, (count), expected_all, \
+                                   got, &pk, &pt);                         \
+            if (prc_ != 0) {                                               \
+                if (prc_ > 0)                                              \
+                    memcpy(out->checksum, got, sizeof got);                \
+                goto fail_run;                                             \
+            }                                                              \
+        } while (0)
+
     for (;;) {
         uint64_t t0 = vb_now_ns();
-        for (uint64_t r = 0; r < reps; r++) {
-            memset(got, 0, sizeof got);
-            VB_DEV_PASS(fail_run);
+        if (pipelined) {
+            VB_DEV_PIPE(reps);
+        } else {
+            for (uint64_t r = 0; r < reps; r++) {
+                memset(got, 0, sizeof got);
+                VB_DEV_PASS(fail_run);
+            }
         }
         uint64_t ns = vb_now_ns() - t0;
 
@@ -947,16 +1020,24 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
 
     uint64_t warm_end = vb_now_ns() + (uint64_t) cfg->warmup_ms * 1000000ull;
     while (vb_now_ns() < warm_end) {
-        memset(got, 0, sizeof got);
-        VB_DEV_PASS(fail_run);
+        if (pipelined) {
+            VB_DEV_PIPE(reps);
+        } else {
+            memset(got, 0, sizeof got);
+            VB_DEV_PASS(fail_run);
+        }
     }
 
     /* Re-calibrate post warm-up, for the same reason as the CPU path. */
     {
         uint64_t t0 = vb_now_ns();
-        for (uint64_t r = 0; r < reps; r++) {
-            memset(got, 0, sizeof got);
-            VB_DEV_PASS(fail_run);
+        if (pipelined) {
+            VB_DEV_PIPE(reps);
+        } else {
+            for (uint64_t r = 0; r < reps; r++) {
+                memset(got, 0, sizeof got);
+                VB_DEV_PASS(fail_run);
+            }
         }
         uint64_t ns = vb_now_ns() - t0;
         if (ns > 0) {
@@ -981,9 +1062,10 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     out->transfer = cfg->transfer;
 
     /* Bytes crossing the link per pass: every device uploads its own slice. */
-    if (cfg->transfer == VB_TRANSFER_STREAM)
+    if (cfg->transfer != VB_TRANSFER_RESIDENT)
         for (int i = 0; i < n_use; i++)
             out->device_transfer_bytes += ctx[i].corpus_bytes;
+    out->device_pipe_chunks = pipelined ? ctx[0].pipe_chunks : 0;
 
     uint64_t kernel_ns = 0, transfer_ns = 0;
     vb_power_begin(&out->power);
@@ -997,7 +1079,21 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     for (unsigned si = 0; si < n_samples; si++) {
         uint64_t t0 = vb_now_ns();
         vb_gpu_clocks_sample(&out->gpu_clocks);
-        for (uint64_t r = 0; r < reps; r++) {
+        if (pipelined) {
+            int prc = pipe_passes(ctx, n_use, cfg, reps, expected_all, got,
+                                  &pk, &pt);
+            if (prc != 0) {
+                if (prc > 0) {
+                    memcpy(out->checksum, got, sizeof got);
+                    out->verified = 0;
+                }
+                out->n_samples = si;
+                goto fail_run;
+            }
+            kernel_ns += pk;
+            transfer_ns += pt;
+        }
+        for (uint64_t r = 0; !pipelined && r < reps; r++) {
             memset(got, 0, sizeof got);
             VB_DEV_PASS(fail_run);
             if (memcmp(got, expected_all, sizeof got) != 0) {
@@ -1031,6 +1127,18 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
         out->device_busy = (double) kernel_ns / 1e9 / out->total_seconds;
         out->device_transfer_busy =
             (double) transfer_ns / 1e9 / out->total_seconds;
+    }
+
+    /* How much of the shorter side the pipeline hid: hashing and uploading
+       summed, less the wall time they took, over the shorter of the two. 1
+       is a perfect pipeline, 0 is two steps taken in turn. */
+    if (pipelined && kernel_ns && transfer_ns) {
+        double wall = out->total_seconds * 1e9;
+        double shorter = (double) (kernel_ns < transfer_ns ? kernel_ns
+                                                           : transfer_ns);
+        double hidden = (double) kernel_ns + (double) transfer_ns - wall;
+        out->device_overlap = hidden <= 0.0 ? 0.0
+                            : hidden >= shorter ? 1.0 : hidden / shorter;
     }
 
     /*
@@ -1071,6 +1179,7 @@ fail_init:
     out->verified = 0;
     return 1;
     #undef VB_DEV_PASS
+    #undef VB_DEV_PIPE
 }
 
 static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,

@@ -66,9 +66,12 @@ static void usage(FILE *f, const char *argv0)
 "  --transfer MODE      how the corpus reaches a device:\n"
 "                       'resident' (default) uploads it once and launches\n"
 "                       against it; 'stream' re-uploads before every launch,\n"
-"                       putting the PCIe link inside the timed region. Use\n"
-"                       stream with a large --working-set-kb to find where\n"
-"                       compute overtakes transfer. No effect on CPU kernels.\n"
+"                       putting the PCIe link inside the timed region;\n"
+"                       'overlap' streams too, uploading in chunks while\n"
+"                       earlier chunks hash -- the sustained rate. Use a\n"
+"                       large --working-set-kb to find where compute\n"
+"                       overtakes transfer. No effect on CPU kernels.\n"
+"  --pipeline-chunks N  chunks per pass with --transfer overlap (default 4)\n"
 "  --host-memory MODE   what a streaming upload reads from: 'pinned'\n"
 "                       (default) page-locked memory the copy engine reads\n"
 "                       directly, or 'pageable' ordinary memory, staged by\n"
@@ -493,6 +496,7 @@ int main(int argc, char **argv)
     const char *expect_arg = NULL, *ladder_arg = NULL;
     /* The first option given that only a device kernel can honour. */
     const char *device_only = NULL;
+    int chunks_given = 0;
     uint32_t ladder[VB_MAX_LADDER];
     unsigned n_ladder = 0;
 
@@ -539,11 +543,18 @@ int main(int argc, char **argv)
                 cfg.transfer = VB_TRANSFER_RESIDENT;
             } else if (!strcmp(m, "stream")) {
                 cfg.transfer = VB_TRANSFER_STREAM;
+            } else if (!strcmp(m, "overlap")) {
+                cfg.transfer = VB_TRANSFER_OVERLAP;
             } else {
                 fprintf(stderr, "valubench: unknown transfer mode '%s' "
-                                "(resident, stream)\n", m);
+                                "(resident, stream, overlap)\n", m);
                 return VB_EXIT_USAGE;
             }
+        } else if (!strcmp(a, "--pipeline-chunks")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            if (!parse_uint(a, argv[++i], 1, 256, &cfg.pipeline_chunks))
+                return VB_EXIT_USAGE;
+            chunks_given = 1;
         } else if (!strcmp(a, "--host-memory")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             const char *m = argv[++i];
@@ -818,6 +829,13 @@ int main(int argc, char **argv)
     if (action == ACT_REFERENCE) {
         emit_reference_ladder(&cfg, ladder, n_ladder);
         return VB_EXIT_OK;
+    }
+
+    /* A chunk count means nothing unless the upload is pipelined. */
+    if (chunks_given && cfg.transfer != VB_TRANSFER_OVERLAP) {
+        fprintf(stderr, "valubench: --pipeline-chunks applies to --transfer "
+                        "overlap\n");
+        return VB_EXIT_USAGE;
     }
 
     /* Imported code is one kernel -- one algorithm, one stream count -- so

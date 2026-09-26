@@ -142,8 +142,42 @@ typedef struct {
        c->last_kernel_ns and c->last_transfer_ns from device events. */
     int         (*read)(vb_dev_ctx *c, size_t bytes);
 
+    /*
+     * Pipelined streaming. Uploads go on a second queue or stream, so chunk
+     * s+1 crosses the link while chunk s hashes.
+     *
+     * pipe_open allocates two device buffers of `chunk_bytes` and two
+     * partial buffers of `read_bytes` (chunk s uses the pair s % 2), and a
+     * ring of VB_PIPE_RING pinned host slots of `read_bytes` for the
+     * readbacks.
+     *
+     * pipe_enqueue queues chunk `seq`, without blocking: the upload of
+     * `bytes` at `offset` into the host slice, once the kernel that last used
+     * its buffer (seq - 2) has finished; the kernel over `n_groups` groups,
+     * once the upload has; and the read of `read_bytes` of partials into ring
+     * slot seq % VB_PIPE_RING.
+     *
+     * pipe_wait blocks until chunk `seq` has been read back, and returns its
+     * partials and the device time of its upload and its kernel. The caller
+     * waits for chunk s before enqueueing chunk s + VB_PIPE_RING.
+     */
+    int         (*pipe_open)(vb_dev_ctx *c, size_t chunk_bytes,
+                             size_t read_bytes);
+    int         (*pipe_enqueue)(vb_dev_ctx *c, uint64_t seq, size_t offset,
+                                size_t bytes, uint64_t n_groups,
+                                uint32_t iterations, size_t shared,
+                                size_t read_bytes);
+    int         (*pipe_wait)(vb_dev_ctx *c, uint64_t seq,
+                             const void **partials, uint64_t *kernel_ns,
+                             uint64_t *transfer_ns);
+
     void        (*destroy)(vb_dev_ctx *c);
 } vb_dev_backend;
+
+/* Chunks in flight per device in a pipeline. Enough that the device always
+   has queued work while the host folds a finished chunk; small enough that
+   the pinned readback ring stays a few pages. */
+#define VB_PIPE_RING 8
 
 const vb_dev_backend *vb_backend(vb_backend_id b);
 
@@ -180,6 +214,8 @@ struct vb_dev_ctx {
     /* Streaming: re-upload the slice before every launch, so the link is
        inside the timed region. */
     int         stream;
+    unsigned    pipe_chunks;      /* > 0: pipelined, this many per pass */
+    size_t      group_bytes;      /* corpus bytes per group */
     int         host_pinned;      /* streaming reads pinned memory */
     const void *host_slice;       /* not owned; the corpus outlives this */
     size_t      corpus_bytes;
@@ -219,6 +255,26 @@ int  vb_dev_ctx_init(vb_dev_ctx *c, const vb_dev_backend *be,
  * side of the ratio streaming exists to measure.
  */
 void vb_dev_ctx_set_stream(vb_dev_ctx *c, int on, int pinned);
+
+/*
+ * Pipelined streaming on after init: each pass uploads the slice in `chunks`
+ * pieces while earlier pieces hash, from pinned memory if `pinned` (and the
+ * platform can). Implies streaming, so repeats are 1. Returns 0, or -1 with
+ * c->error set if the pipeline cannot be built.
+ */
+int  vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned);
+
+/*
+ * Run `passes` passes on every context as one continuous pipeline per device,
+ * all devices concurrently. out[p] receives the XOR of pass p's digests over
+ * every device, so each pass can be checked against the single-pass
+ * checksum; kernel_ns and transfer_ns the device time spent hashing and
+ * uploading, the most of any device. 0, or -1 with the failing context's
+ * error set.
+ */
+int  vb_dev_pipe_run(vb_dev_ctx *ctx, int n, uint32_t iterations,
+                     uint64_t passes, uint64_t (*out)[VB_MAX_DIGEST_WORDS],
+                     uint64_t *kernel_ns, uint64_t *transfer_ns);
 
 /* Launch once and fold the partials. The split lets several devices run
    concurrently: enqueue on every device, then collect from each. */

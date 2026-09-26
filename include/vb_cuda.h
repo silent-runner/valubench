@@ -94,6 +94,8 @@ typedef vb_CUresult (*cu_fn_EventCreate)(vb_CUevent *, unsigned);
 typedef vb_CUresult (*cu_fn_EventDestroy)(vb_CUevent);
 typedef vb_CUresult (*cu_fn_EventRecord)(vb_CUevent, vb_CUstream);
 typedef vb_CUresult (*cu_fn_EventElapsedTime)(float *, vb_CUevent, vb_CUevent);
+typedef vb_CUresult (*cu_fn_EventSynchronize)(vb_CUevent);
+typedef vb_CUresult (*cu_fn_StreamWaitEvent)(vb_CUstream, vb_CUevent, unsigned);
 typedef vb_CUresult (*cu_fn_LaunchKernel)(vb_CUfunction, unsigned, unsigned,
                                           unsigned, unsigned, unsigned,
                                           unsigned, unsigned, vb_CUstream,

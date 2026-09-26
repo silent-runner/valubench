@@ -180,6 +180,8 @@ int vb_cuda_load(void)
     LOAD_CU(EventRecord,            "cuEventRecord");
     LOAD_CU(EventElapsedTime,       "cuEventElapsedTime_v2",
                                     "cuEventElapsedTime");
+    LOAD_CU(EventSynchronize,       "cuEventSynchronize");
+    LOAD_CU(StreamWaitEvent,        "cuStreamWaitEvent");
     LOAD_CU(LaunchKernel,           "cuLaunchKernel");
     *(void **) (&g_cu.GetErrorName) = dlsym(g_cu.lib, "cuGetErrorName");
 

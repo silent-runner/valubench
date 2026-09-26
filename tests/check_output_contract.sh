@@ -150,6 +150,9 @@ expect_exit 2 "negative"              "$BIN" --threads -4
 expect_exit 2 "out of range"          "$BIN" --samples 0
 expect_exit 2 "unknown algorithm"     "$BIN" --algorithm nosuchalg
 expect_exit 2 "unknown host memory"   "$BIN" --host-memory locked
+expect_exit 2 "zero pipeline chunks"  "$BIN" --transfer overlap --pipeline-chunks 0
+# A chunk count without a pipelined upload would be silently ignored.
+expect_exit 2 "chunks without overlap" "$BIN" --transfer stream --pipeline-chunks 4
 expect_exit 2 "unknown primitives"    "$BIN" --primitives fast
 expect_exit 2 "geometry, one number"  "$BIN" --device-geometry 4096
 expect_exit 2 "geometry, zero"        "$BIN" --device-geometry 0,64

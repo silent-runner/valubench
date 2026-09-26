@@ -176,9 +176,14 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
                 r->device_repeats);
         fprintf(f, "    \"kernel_busy_fraction\": %.4f,\n", r->device_busy);
         json_kv_str(f, "transfer_mode",
+                    r->transfer == VB_TRANSFER_OVERLAP ? "overlap" :
                     r->transfer == VB_TRANSFER_STREAM ? "stream" : "resident",
                     ",");
-        if (r->transfer == VB_TRANSFER_STREAM) {
+        if (r->transfer == VB_TRANSFER_OVERLAP) {
+            fprintf(f, "    \"pipeline_chunks\": %u,\n", r->device_pipe_chunks);
+            fprintf(f, "    \"overlap_efficiency\": %.4f,\n", r->device_overlap);
+        }
+        if (r->transfer != VB_TRANSFER_RESIDENT) {
             /* What the upload actually read from, which can be pageable
                when pinned was asked for and the platform could not map it. */
             json_kv_str(f, "host_memory",
@@ -433,10 +438,15 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
                 r->device_count > 1 ? "  (first device)" : "");
         fprintf(f, "  kernel busy %.1f%% of wall time%s\n",
                 r->device_busy * 100.0,
-                (r->device_busy < 0.9 && r->transfer != VB_TRANSFER_STREAM)
+                (r->device_busy < 0.9 && r->transfer == VB_TRANSFER_RESIDENT)
                     ? "  (the rest is launch overhead)" : "");
 
-        if (r->transfer == VB_TRANSFER_STREAM) {
+        if (r->transfer == VB_TRANSFER_OVERLAP)
+            fprintf(f, "  pipelined   %u chunk%s per pass; %.0f%% of the shorter "
+                       "of hashing and uploading hidden\n",
+                    r->device_pipe_chunks, r->device_pipe_chunks == 1 ? "" : "s",
+                    r->device_overlap * 100.0);
+        if (r->transfer != VB_TRANSFER_RESIDENT) {
             fprintf(f, "  transfer    %.1f%% of wall, %.2f GB/s host->device "
                        "(%.1f MiB per pass, %s)\n",
                     r->device_transfer_busy * 100.0,
@@ -752,8 +762,10 @@ void vb_report_capabilities_json(FILE *f)
     fprintf(f, "    \"time_ms\": %u,\n", def.target_ms);
     fprintf(f, "    \"warmup_ms\": %u,\n", def.warmup_ms);
     json_kv_str(f, "transfer",
+                def.transfer == VB_TRANSFER_OVERLAP ? "overlap" :
                 def.transfer == VB_TRANSFER_STREAM ? "stream" : "resident",
                 ",");
+    fprintf(f, "    \"pipeline_chunks\": %u,\n", def.pipeline_chunks);
     json_kv_str(f, "host_memory",
                 def.host_memory == VB_HOST_PINNED ? "pinned" : "pageable",
                 ",");
@@ -767,7 +779,7 @@ void vb_report_capabilities_json(FILE *f)
                "\"usage\": %d, \"noisy\": %d },\n",
             VB_EXIT_OK, VB_EXIT_VERIFY_FAILED, VB_EXIT_USAGE, VB_EXIT_NOISY);
 
-    fprintf(f, "  \"transfer_modes\": [\"resident\", \"stream\"],\n");
+    fprintf(f, "  \"transfer_modes\": [\"resident\", \"stream\", \"overlap\"],\n");
     fprintf(f, "  \"host_memory_modes\": [\"pinned\", \"pageable\"],\n");
     /* The device-layer switches, so a driving script asks rather than
        guesses whether this binary has them. */
