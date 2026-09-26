@@ -366,3 +366,15 @@ jobs:
             --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
           ./build/valubench --kernel md5/ocl-s2 --device 0 \
             --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
+
+      - name: pinned geometry, neutral primitives and dumped code must verify
+        run: |
+          set -e
+          ./build/valubench --kernel sha1/ocl-s1 --device-geometry 4096,64 \
+            --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
+          ./build/valubench --kernel sha512/ocl-s1 --primitives neutral \
+            --samples 2 --time-ms 50 --warmup-ms 50 | grep -q "verified    yes"
+          mkdir -p dump
+          ./build/valubench --kernel md5/ocl-s1 --dump-device-code dump \
+            --samples 1 --time-ms 20 --warmup-ms 0 >/dev/null
+          test -s dump/md5-s1.opencl.d0.cl && test -s dump/md5-s1.opencl.d0.log

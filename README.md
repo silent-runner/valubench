@@ -229,7 +229,8 @@ Known gaps, in the order they matter:
 | [src/kernels/cpu/](src/kernels/cpu/) | CPU kernels, one translation unit per ISA — see its [README](src/kernels/cpu/README.md) for how to add one |
 | [src/kernels/cpu/md5_kernel_impl.h](src/kernels/cpu/md5_kernel_impl.h) | The multi-way kernel, written once |
 | [src/kernels/gpu/](src/kernels/gpu/) | Device kernels: one core per hash, compiled under OpenCL or CUDA through a dialect header |
-| [src/opencl/](src/opencl/) | The host-side OpenCL driver — loader, context, upload, launch. No hash functions |
+| [src/device/](src/device/) | What every device API shares: program composition, launch geometry, repeats, the partial fold, the device list, and the per-vendor steer table |
+| [src/opencl/](src/opencl/) | The OpenCL backend — loader, compile, upload, launch. No hash functions |
 | [src/bench.c](src/bench.c) | Validation, autotune, timing, statistics |
 | [tools/sweep.py](tools/sweep.py) | Walks a parameter grid, writes CSV, solves for the PCIe balance point |
 | [tools/compare.py](tools/compare.py) | Diffs two result sets, gated on the verification checksum |

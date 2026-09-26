@@ -10,7 +10,7 @@
 
 #include "valubench.h"
 #include "power.h"
-#include "opencl.h"
+#include "device.h"
 
 #include <stdint.h>
 
@@ -90,6 +90,20 @@ typedef struct {
     char device_vendor[128];
     char device_driver[64];
     char device_error[512];
+
+    /* What ran the device kernel, so two APIs on one card can be told apart
+       and grouped: the backend, what compiled the program and how, the
+       OpenCL platform, the card's PCI address, and which primitive steers
+       were compiled in. */
+    char device_backend[16];
+    char device_compiler[64];
+    char device_compiler_version[96];
+    char device_compile_mode[16];
+    char device_platform[128];
+    char device_pci[16];
+    char device_steers[128];
+    int  device_primitives_neutral;
+    int  device_geometry_pinned;
     size_t   device_global;     /* work-items launched, first device */
     size_t   device_local;      /* work-group size, first device */
     uint32_t device_repeats;    /* corpus sweeps per launch, first device */
@@ -168,16 +182,24 @@ typedef struct {
     unsigned message_bytes;     /* message length */
     const vb_algorithm *alg;    /* which hash to benchmark */
     unsigned working_set_kb;    /* target corpus size; sets the batch count */
-    /* OpenCL devices to use. Empty means every device found. */
+    /* Devices to use, as --device indices. Empty means every device the
+       kernel's backend can reach. */
     /*
      * Sized by what the measurement path can hold, not by the thread limit.
      * These were VB_MAX_THREADS (1024) while measure_device() reserves
-     * VB_OCL_MAX_DEVICES (32), and the copy between them was unchecked: 33
+     * VB_DEV_MAX (32), and the copy between them was unchecked: 33
      * valid indices segfaulted. Out-of-range indices were already rejected, so
      * reaching it needed duplicates, which the parser accepted.
      */
-    int      device_index[VB_OCL_MAX_DEVICES];
+    int      device_index[VB_DEV_MAX];
     int      device_count;
+
+    /* Device compilation and launch; see vb_dev_options. */
+    int      primitives_neutral;   /* --primitives neutral */
+    const char *dump_dir;          /* --dump-device-code */
+    size_t   pin_global;           /* --device-geometry; 0 = tune */
+    size_t   pin_local;
+    vb_compile_mode compile_mode;  /* --compile-mode, CUDA only */
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
     vb_host_memory host_memory; /* what a streaming upload reads from */
     vb_where where;             /* which kernels autotune may pick from */

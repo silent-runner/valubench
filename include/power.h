@@ -154,11 +154,20 @@ typedef struct {
     uint64_t throttle_seen;  /* OR over every sample of every device */
 } vb_gpu_clocks;
 
+/*
+ * Restrict clock telemetry to the devices a run uses, by PCI address
+ * ("0000:01:00.0"). It read every NVML device and kept the highest, so on a
+ * machine with two cards the idle one could report the clock. An empty list
+ * -- or a device whose API gave no address -- samples every device, as
+ * before, since a guess would be worse than the old behaviour.
+ */
+void vb_gpu_clocks_select(const char *const *pci, int n);
+
 /* Zero the aggregate and note how many NVML devices will be sampled. */
 void vb_gpu_clocks_reset(vb_gpu_clocks *g);
 
-/* One sample of every NVML device. Cheap enough to call per timed iteration;
-   silently does nothing when NVML is absent. */
+/* One sample of every selected NVML device. Cheap enough to call per timed
+   iteration; silently does nothing when NVML is absent. */
 void vb_gpu_clocks_sample(vb_gpu_clocks *g);
 
 /* Human-readable throttle reasons into `buf`, or "none". Returns buf. */

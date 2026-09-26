@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void usage(FILE *f, const char *argv0)
 {
@@ -37,15 +38,21 @@ static void usage(FILE *f, const char *argv0)
 "                       binary rather than a result: algorithms, kernels,\n"
 "                       limits, defaults, exit codes and devices.\n"
 "  --list               list kernels and whether they run on this machine\n"
-"  --list-devices       list OpenCL devices, or say why there are none\n"
-"  --device LIST        OpenCL devices to use: an index, a comma-separated\n"
-"                       list, or 'all' (the default). Several devices run\n"
-"                       concurrently over slices of the same corpus.\n"
+"  --list-devices       list devices and the APIs that reach each, or say\n"
+"                       why there are none\n"
+"  --device LIST        devices to use: an index from --list-devices, a\n"
+"                       comma-separated list, or 'all' (the default: every\n"
+"                       device the kernel's API reaches). Several devices\n"
+"                       run concurrently over slices of the same corpus.\n"
 "  --kernel NAME        force a kernel (default: autotune)\n"
 "  --where WHICH        restrict autotune to 'cpu' or 'device' kernels\n"
 "                       ('any' is the default). A CPU baseline on a machine\n"
 "                       with a GPU needs this: otherwise the device kernel\n"
-"                       wins the probe and the result is not a CPU number.\n"
+"                       wins the probe and the result is not a CPU number.\n",
+            argv0);
+    /* Two calls because C only promises string literals of 4095 characters,
+       and the help text is longer. */
+    fprintf(f,
 "  --threads N          worker threads (default: one per allowed CPU, %u here)\n"
 "  --message-bytes L    message length (default %u, range %u..%u). Raises\n"
 "                       both compute and bytes read per hash.\n"
@@ -63,6 +70,15 @@ static void usage(FILE *f, const char *argv0)
 "                       directly, or 'pageable' ordinary memory, staged by\n"
 "                       the driver, as every transfer figure was before\n"
 "                       pinned staging. Only meaningful with --transfer stream.\n"
+"  --primitives MODE    'steered' (default) compiles device kernels with the\n"
+"                       per-vendor primitive spellings; 'neutral' with plain C\n"
+"                       everywhere, to size what steering is worth.\n"
+"  --device-geometry G,L  launch G work-items in groups of L instead of\n"
+"                       tuning, on every device and API alike -- the control\n"
+"                       for comparing compiled kernels. Refused if the kernel\n"
+"                       cannot use it.\n"
+"  --dump-device-code DIR  write each device program as compiled -- source,\n"
+"                       intermediate code and compiler log -- into DIR.\n"
 "  --working-set-kb K   target corpus size (default 1024). Sets how many\n"
 "                       messages are hashed, so sweeping it walks the result\n"
 "                       from L1-resident to DRAM-bound.\n"
@@ -87,7 +103,7 @@ static void usage(FILE *f, const char *argv0)
 "Exit status: 0 success, 1 verification failure, 2 usage error or the\n"
 "             kernel could not run (no memory, threads, or device),\n"
 "             3 result too noisy to trust.\n",
-            argv0, vb_default_threads(),
+            vb_default_threads(),
             VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
             VB_MAX_ITERS, VB_MAX_SAMPLES);
 }
@@ -126,16 +142,16 @@ static int parse_devices(const char *spec, vb_config *cfg)
                             "got '%s'\n", spec);
             return -1;
         }
-        if (errno == ERANGE || v < 0 || v > VB_OCL_MAX_DEVICES - 1) {
+        if (errno == ERANGE || v < 0 || v > VB_DEV_MAX - 1) {
             fprintf(stderr, "valubench: --device index %ld is out of range "
-                            "(0..%d)\n", v, VB_OCL_MAX_DEVICES - 1);
+                            "(0..%d)\n", v, VB_DEV_MAX - 1);
             return -1;
         }
         /* Refuse rather than truncate. Silently dropping the tail of a device
            list would measure something other than what was asked for. */
-        if (cfg->device_count >= VB_OCL_MAX_DEVICES) {
+        if (cfg->device_count >= VB_DEV_MAX) {
             fprintf(stderr, "valubench: --device takes at most %d indices\n",
-                    VB_OCL_MAX_DEVICES);
+                    VB_DEV_MAX);
             return -1;
         }
         /* A repeated index would give one physical device two slices of the
@@ -158,32 +174,69 @@ static int parse_devices(const char *spec, vb_config *cfg)
 
 static void list_devices(void)
 {
-    vb_ocl_device d[VB_OCL_MAX_DEVICES];
-    int n = vb_ocl_devices(d, VB_OCL_MAX_DEVICES);
+    vb_device d[VB_DEV_MAX];
+    int n = vb_devices(d, VB_DEV_MAX);
 
     if (n <= 0) {
-        const char *why = vb_ocl_error();
-        printf("No OpenCL devices.\n");
-        if (why)
-            printf("  %s\n", why);
+        printf("No devices.\n");
+        for (int b = 0; b < VB_BACKEND_COUNT; b++) {
+            const char *why = vb_backend_unavailable((vb_backend_id) b);
+            printf("  %-7s %s\n", vb_backend_name((vb_backend_id) b),
+                   why ? why : "no devices");
+        }
         printf("  This is not an error: valubench runs CPU-only without them.\n");
         return;
     }
 
     for (int i = 0; i < n; i++) {
-        printf("[%d] %s\n", i, d[i].name);
-        printf("     vendor    %s\n", d[i].vendor);
+        const vb_dev_info *v = vb_device_info(&d[i]);
+        printf("[%d] %s\n", i, v->name);
+        printf("     vendor    %s\n", v->vendor);
         printf("     type      %s, %u compute units @ %u MHz\n",
-               vb_ocl_type_name(d[i].type), d[i].compute_units, d[i].clock_mhz);
+               v->is_gpu ? "GPU" : "other", v->compute_units, v->clock_mhz);
         printf("     memory    %llu MiB global, %llu MiB max allocation\n",
-               (unsigned long long) (d[i].global_mem >> 20),
-               (unsigned long long) (d[i].max_alloc >> 20));
-        printf("     max wg    %zu\n", d[i].max_work_group);
-        printf("     platform  %s (%s)\n", d[i].platform_name,
-               d[i].platform_version);
-        printf("     driver    %s, device %s\n", d[i].driver_version,
-               d[i].device_version);
+               (unsigned long long) (v->global_mem >> 20),
+               (unsigned long long) (v->max_alloc >> 20));
+        printf("     pci       %s%s\n", v->pci[0] ? v->pci : "unknown",
+               v->pci_no_domain ? " (domain not reported)" : "");
+        for (int b = 0; b < VB_BACKEND_COUNT; b++) {
+            if (!d[i].present[b])
+                continue;
+            const vb_dev_info *w = &d[i].via[b];
+            if (b == VB_BACKEND_OPENCL)
+                printf("     opencl    %s, driver %s, max wg %zu\n",
+                       w->platform, w->driver, w->max_work_group);
+            else
+                printf("     %-9s %s%s%s, driver %s, max wg %zu\n",
+                       vb_backend_name((vb_backend_id) b), w->arch,
+                       w->api_version[0] ? ", " : "", w->api_version,
+                       w->driver, w->max_work_group);
+        }
     }
+}
+
+/* "GLOBAL,LOCAL" for --device-geometry: two positive counts. Whether the
+   kernel can use them is only known once it is built, and is checked there. */
+static int parse_geometry(const char *spec, vb_config *cfg)
+{
+    char *end;
+    errno = 0;
+    unsigned long long g = strtoull(spec, &end, 10);
+    if (end == spec || *end != ',' || errno == ERANGE || g == 0 ||
+        spec[0] == '-')
+        goto bad;
+    const char *l_at = end + 1;
+    unsigned long long l = strtoull(l_at, &end, 10);
+    if (end == l_at || *end != '\0' || errno == ERANGE || l == 0 ||
+        l_at[0] == '-' || g > SIZE_MAX / 2 || l > 65536)
+        goto bad;
+    cfg->pin_global = (size_t) g;
+    cfg->pin_local = (size_t) l;
+    return 0;
+bad:
+    fprintf(stderr, "valubench: --device-geometry wants GLOBAL,LOCAL work-item "
+                    "counts, got '%s'\n", spec);
+    return -1;
 }
 
 static int need_arg(int i, int argc, const char *flag)
@@ -401,6 +454,8 @@ int main(int argc, char **argv)
     /* Both are resolved after the loop, for the same reason --list is: they
        depend on --algorithm, which may appear either side of them. */
     const char *expect_arg = NULL, *ladder_arg = NULL;
+    /* The first option given that only a device kernel can honour. */
+    const char *device_only = NULL;
     uint32_t ladder[VB_MAX_LADDER];
     unsigned n_ladder = 0;
 
@@ -464,6 +519,32 @@ int main(int argc, char **argv)
                                 "(pinned, pageable)\n", m);
                 return VB_EXIT_USAGE;
             }
+        } else if (!strcmp(a, "--primitives")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            const char *m = argv[++i];
+            if (!strcmp(m, "steered")) {
+                cfg.primitives_neutral = 0;
+            } else if (!strcmp(m, "neutral")) {
+                cfg.primitives_neutral = 1;
+            } else {
+                fprintf(stderr, "valubench: unknown --primitives '%s' "
+                                "(steered, neutral)\n", m);
+                return VB_EXIT_USAGE;
+            }
+            device_only = device_only ? device_only : a;
+        } else if (!strcmp(a, "--device-geometry")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            if (parse_geometry(argv[++i], &cfg) != 0) return VB_EXIT_USAGE;
+            device_only = device_only ? device_only : a;
+        } else if (!strcmp(a, "--dump-device-code")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            cfg.dump_dir = argv[++i];
+            if (access(cfg.dump_dir, W_OK | X_OK) != 0) {
+                fprintf(stderr, "valubench: --dump-device-code: cannot write "
+                                "to '%s'\n", cfg.dump_dir);
+                return VB_EXIT_USAGE;
+            }
+            device_only = device_only ? device_only : a;
         } else if (!strcmp(a, "--where")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             const char *w = argv[++i];
@@ -674,6 +755,21 @@ int main(int argc, char **argv)
         return VB_EXIT_OK;
     }
 
+    /* An option that only a device kernel can honour, on a run that can only
+       pick a CPU kernel, would silently do nothing -- a dump directory left
+       empty, a geometry never used. */
+    if (device_only && ((k && !k->device) ||
+                        (!k && cfg.where == VB_WHERE_CPU))) {
+        if (k)
+            fprintf(stderr, "valubench: %s applies to device kernels, and "
+                            "--kernel '%s' runs on the cpu\n", device_only,
+                    k->name);
+        else
+            fprintf(stderr, "valubench: %s applies to device kernels, which "
+                            "--where cpu excludes\n", device_only);
+        return VB_EXIT_USAGE;
+    }
+
     vb_sysinfo si;
     vb_sysinfo_collect(&si);
 
@@ -681,9 +777,17 @@ int main(int argc, char **argv)
        so the JSON stays parseable without filtering. */
     if (k) {
         if (!k->available()) {
-            fprintf(stderr,
-                    "valubench: kernel '%s' needs %s, which this CPU lacks\n",
-                    k->name, k->isa);
+            if (k->device) {
+                const char *why = vb_backend_unavailable((vb_backend_id)
+                                                         k->backend);
+                fprintf(stderr, "valubench: kernel '%s' needs a %s device, "
+                                "and there is none%s%s\n", k->name, k->isa,
+                        why ? ": " : "", why ? why : "");
+            } else {
+                fprintf(stderr,
+                        "valubench: kernel '%s' needs %s, which this CPU "
+                        "lacks\n", k->name, k->isa);
+            }
             return VB_EXIT_USAGE;
         }
         /*

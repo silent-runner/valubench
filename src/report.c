@@ -157,6 +157,19 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
         json_kv_str(f, "name", r->device_name, ",");
         json_kv_str(f, "vendor", r->device_vendor, ",");
         json_kv_str(f, "driver", r->device_driver, ",");
+        /* Which API ran it and what compiled it -- enough to tell two APIs
+           on one card apart, and two compilers under one API. */
+        json_kv_str(f, "backend", r->device_backend, ",");
+        json_kv_str(f, "compiler", r->device_compiler, ",");
+        json_kv_str(f, "compiler_version", r->device_compiler_version, ",");
+        json_kv_str(f, "compile_mode", r->device_compile_mode, ",");
+        json_kv_str(f, "platform", r->device_platform, ",");
+        json_kv_str(f, "pci_address", r->device_pci, ",");
+        json_kv_str(f, "primitives",
+                    r->device_primitives_neutral ? "neutral" : "steered", ",");
+        json_kv_str(f, "steers", r->device_steers, ",");
+        json_kv_str(f, "geometry_source",
+                    r->device_geometry_pinned ? "pinned" : "tuned", ",");
         fprintf(f, "    \"global_work\": %zu,\n", r->device_global);
         fprintf(f, "    \"local_work\": %zu,\n", r->device_local);
         fprintf(f, "    \"corpus_sweeps_per_launch\": %u,\n",
@@ -378,12 +391,22 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
     if (r->device_name[0]) {
         fprintf(f, "  device      %s (%s, driver %s)\n",
                 r->device_name, r->device_vendor, r->device_driver);
+        fprintf(f, "  compiled    %s: %s, %s (%s)\n", r->device_backend,
+                r->device_compiler, r->device_compiler_version,
+                r->device_compile_mode);
+        fprintf(f, "  primitives  %s%s%s\n",
+                r->device_primitives_neutral ? "neutral" : "steered",
+                r->device_steers[0] ? ": " : "",
+                r->device_steers[0] ? r->device_steers
+                                    : (r->device_primitives_neutral
+                                       ? "" : ", none steered on this device"));
         if (r->device_count > 1)
             fprintf(f, "  devices     %d, running concurrently over slices of "
                        "the corpus\n", r->device_count);
         fprintf(f, "  launch      %zu work-items x %zu per group, "
-                   "%u corpus sweeps%s\n",
+                   "%u corpus sweeps%s%s\n",
                 r->device_global, r->device_local, r->device_repeats,
+                r->device_geometry_pinned ? ", pinned" : "",
                 r->device_count > 1 ? "  (first device)" : "");
         fprintf(f, "  kernel busy %.1f%% of wall time%s\n",
                 r->device_busy * 100.0,
@@ -574,6 +597,8 @@ static void json_device(FILE *f, int index, const vb_ocl_device *d)
     json_str(f, d->driver_version);
     fprintf(f, ", \"device_version\": ");
     json_str(f, d->device_version);
+    fprintf(f, ", \"pci_address\": ");
+    json_str(f, d->pci);
     fprintf(f, " }");
 }
 
@@ -601,7 +626,52 @@ static void json_opencl(FILE *f)
         json_device(f, i, &d[i]);
     }
     fprintf(f, "%s]\n", n > 0 ? "\n    " : "");
-    fprintf(f, "  }\n");
+    fprintf(f, "  },\n");
+}
+
+/*
+ * Every device once, whichever APIs reach it, in the order --device indexes
+ * them -- and each backend's availability, so "no CUDA" says why. The
+ * "opencl" object above is kept as it was for tooling that reads it.
+ */
+static void json_devices(FILE *f)
+{
+    vb_device d[VB_DEV_MAX];
+    int n = vb_devices(d, VB_DEV_MAX);
+
+    fprintf(f, "  \"backends\": {");
+    for (int b = 0; b < VB_BACKEND_COUNT; b++) {
+        int any = 0;
+        for (int i = 0; i < n; i++)
+            any |= d[i].present[b];
+        const char *why = any ? NULL : vb_backend_unavailable((vb_backend_id) b);
+        fprintf(f, "%s\n    \"%s\": { \"available\": %s, \"error\": ",
+                b ? "," : "", vb_backend_name((vb_backend_id) b),
+                any ? "true" : "false");
+        if (why)
+            json_str(f, why);
+        else
+            fputs("null", f);
+        fprintf(f, " }");
+    }
+    fprintf(f, "\n  },\n");
+
+    fprintf(f, "  \"devices\": [");
+    for (int i = 0; i < n; i++) {
+        const vb_dev_info *v = vb_device_info(&d[i]);
+        fprintf(f, "%s\n    { \"index\": %d, \"name\": ", i ? "," : "", i);
+        json_str(f, v->name);
+        fprintf(f, ", \"pci_address\": ");
+        json_str(f, v->pci);
+        fprintf(f, ", \"backends\": [");
+        int k = 0;
+        for (int b = 0; b < VB_BACKEND_COUNT; b++)
+            if (d[i].present[b])
+                fprintf(f, "%s\"%s\"", k++ ? ", " : "",
+                        vb_backend_name((vb_backend_id) b));
+        fprintf(f, "] }");
+    }
+    fprintf(f, "%s]\n", n > 0 ? "\n  " : "");
 }
 
 void vb_report_capabilities_json(FILE *f)
@@ -663,6 +733,11 @@ void vb_report_capabilities_json(FILE *f)
 
     fprintf(f, "  \"transfer_modes\": [\"resident\", \"stream\"],\n");
     fprintf(f, "  \"host_memory_modes\": [\"pinned\", \"pageable\"],\n");
+    /* The device-layer switches, so a driving script asks rather than
+       guesses whether this binary has them. */
+    fprintf(f, "  \"primitives_modes\": [\"steered\", \"neutral\"],\n");
+    fprintf(f, "  \"device_geometry\": true,\n");
+    fprintf(f, "  \"dump_device_code\": true,\n");
     /* Autotune restrictions. "cpu" is what makes a CPU baseline measurable on
        a machine whose device kernel would otherwise win every probe. */
     fprintf(f, "  \"where_filters\": [\"any\", \"cpu\", \"device\"],\n");
@@ -693,6 +768,7 @@ void vb_report_capabilities_json(FILE *f)
     fprintf(f, "\n  ],\n");
 
     json_opencl(f);
+    json_devices(f);
 
     fprintf(f, "}\n");
 }
@@ -702,5 +778,6 @@ void vb_report_devices_json(FILE *f)
     fprintf(f, "{\n");
     fprintf(f, "  \"schema\": \"valubench/devices/1\",\n");
     json_opencl(f);
+    json_devices(f);
     fprintf(f, "}\n");
 }
