@@ -51,6 +51,17 @@ outside this repository while a durable format for them is decided.
 
 ### Added
 
+- **`--transfer overlap`: the sustained rate with uploads overlapping
+  hashing.** Streaming uploaded each pass and then hashed it, so the link and
+  the device took turns. Overlap uploads each pass in chunks on a second queue
+  or stream (`--pipeline-chunks`, default 4) into alternating device buffers
+  while earlier chunks hash, continuously across passes, with the partials
+  read back asynchronously into pinned memory; every pass is still verified.
+  The result reports `overlap_efficiency` -- how much of the shorter of
+  hashing and uploading the pipeline hid -- beside the per-pass kernel and
+  transfer times. Both backends, through the shared device layer; `sweep.py`
+  takes it as a transfer mode and `--pipeline-chunks` as an axis, and fits
+  each mode's crossover separately.
 - **A CUDA backend.** On an NVIDIA card with NVRTC available, every device
   kernel also runs through CUDA as `md5/cuda-s1` and its siblings: the same
   cores, compiled at run time by NVRTC for the device present, launched by the
@@ -95,6 +106,10 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`sweep.py` flagged points as duplicate working sets when only their size
+  matched**, so two transfer modes, kernels or compile modes over one corpus
+  were reported as collapsed onto each other. It now compares everything the
+  point asked for.
 - **`sweep.py` fitted one crossover through incompatible points.** The PCIe
   balance point was fitted per algorithm and kernel only, so a sweep over two
   message lengths, two working sets or pinned and pageable uploads drew one

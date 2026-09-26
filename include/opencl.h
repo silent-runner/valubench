@@ -49,6 +49,7 @@ typedef struct {
     cl_fn_EnqueueNDRangeKernel    EnqueueNDRangeKernel;
     cl_fn_GetEventProfilingInfo   GetEventProfilingInfo;
     cl_fn_ReleaseEvent            ReleaseEvent;
+    cl_fn_WaitForEvents           WaitForEvents;
 } vb_ocl;
 
 /*

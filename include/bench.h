@@ -31,7 +31,15 @@
  */
 typedef enum {
     VB_TRANSFER_RESIDENT = 0,
-    VB_TRANSFER_STREAM
+    VB_TRANSFER_STREAM,
+    /*
+     * Streaming with the upload overlapped: each pass goes up in chunks on a
+     * second queue while earlier chunks hash, continuously across passes.
+     * What a competent offload achieves, and so the sustained rate; STREAM,
+     * which uploads and then hashes, is the non-overlapped baseline beside
+     * it.
+     */
+    VB_TRANSFER_OVERLAP
 } vb_transfer_mode;
 
 /*
@@ -126,6 +134,10 @@ typedef struct {
     vb_transfer_mode transfer;
     int      device_host_pinned;     /* streaming read pinned memory, on
                                         every device; 0 if any fell back */
+    unsigned device_pipe_chunks;     /* overlap: chunks per pass, device 0 */
+    /* Overlap: how much of the shorter of hashing and uploading the pipeline
+       hid, 0 (none: they ran in turn) to 1 (all of it). */
+    double   device_overlap;
     double   device_transfer_busy;   /* fraction of wall spent uploading */
     double   device_transfer_gbps;   /* effective host-to-device rate */
     uint64_t device_transfer_bytes;  /* uploaded per pass, all devices */
@@ -210,6 +222,7 @@ typedef struct {
     unsigned backend_mask;
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
     vb_host_memory host_memory; /* what a streaming upload reads from */
+    unsigned pipeline_chunks;   /* --pipeline-chunks, for VB_TRANSFER_OVERLAP */
     vb_where where;             /* which kernels autotune may pick from */
     double   cov_threshold;     /* result flagged unstable above this */
     int      pin_cpu;           /* pin worker threads to distinct cores */

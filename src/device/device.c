@@ -393,6 +393,7 @@ int vb_dev_ctx_init(vb_dev_ctx *c, const vb_dev_backend *be,
     }
     c->host_slice = slice;
     c->corpus_bytes = corpus_bytes;
+    c->group_bytes = (size_t) streams * slot_words * word_bytes;
 
     /*
      * The partial buffer is sized for the largest launch that might be chosen:
@@ -482,27 +483,115 @@ int vb_dev_ctx_enqueue(vb_dev_ctx *c, uint32_t iterations)
     return c->be->launch(c, iterations, c->local_size * partial_bytes(c));
 }
 
+/* XOR a launch's work-group partials into acc. XOR is associative, so
+   folding per launch, per chunk and again across devices gives the value one
+   device would. Slots past the digest width stay zero, as the reference
+   carries them. */
+static void fold(const vb_dev_ctx *c, const void *partials,
+                 uint64_t acc[VB_MAX_DIGEST_WORDS])
+{
+    if (c->partial_word_bytes == 8) {
+        const uint64_t *p = partials;
+        for (uint64_t i = 0; i < c->n_partials; i++)
+            for (unsigned w = 0; w < c->partial_words; w++)
+                acc[w] ^= p[i * c->partial_words + w];
+    } else {
+        const uint32_t *p = partials;
+        for (uint64_t i = 0; i < c->n_partials; i++)
+            for (unsigned w = 0; w < c->partial_words; w++)
+                acc[w] ^= p[i * c->partial_words + w];
+    }
+}
+
 int vb_dev_ctx_collect(vb_dev_ctx *c, uint64_t checksum[VB_MAX_DIGEST_WORDS])
 {
     if (c->be->read(c, c->n_partials * partial_bytes(c)) != 0)
         return -1;
-
-    /* Fold this device's work-group partials. XOR is associative, so folding
-       here and again across devices gives the value one device would. Slots
-       past the digest width stay zero, as the reference carries them. */
     for (unsigned w = 0; w < VB_MAX_DIGEST_WORDS; w++)
         checksum[w] = 0;
+    fold(c, c->partials, checksum);
+    return 0;
+}
 
-    if (c->partial_word_bytes == 8) {
-        const uint64_t *p = (const uint64_t *) c->partials;
-        for (uint64_t i = 0; i < c->n_partials; i++)
-            for (unsigned w = 0; w < c->partial_words; w++)
-                checksum[w] ^= p[i * c->partial_words + w];
-    } else {
-        const uint32_t *p = (const uint32_t *) c->partials;
-        for (uint64_t i = 0; i < c->n_partials; i++)
-            for (unsigned w = 0; w < c->partial_words; w++)
-                checksum[w] ^= p[i * c->partial_words + w];
+/* ---- pipelined streaming ------------------------------------------------ */
+
+int vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned)
+{
+    if (!c->be->pipe_open) {
+        set_err(c, "the %s backend cannot pipeline transfers", c->be->name);
+        return -1;
+    }
+    /* A chunk is whole groups, so a slice of one group is one chunk; the
+       pipeline still overlaps it with the next pass's upload. */
+    if (chunks < 1)
+        chunks = 1;
+    if (chunks > c->n_groups)
+        chunks = (unsigned) c->n_groups;
+
+    vb_dev_ctx_set_stream(c, 1, pinned);
+    c->pipe_chunks = chunks;
+
+    uint64_t first, largest;
+    vb_dev_slice(c->n_groups, (int) chunks, 0, &first, &largest);
+    return c->be->pipe_open(c, (size_t) largest * c->group_bytes,
+                            c->n_partials * partial_bytes(c));
+}
+
+int vb_dev_pipe_run(vb_dev_ctx *ctx, int n, uint32_t iterations,
+                    uint64_t passes, uint64_t (*out)[VB_MAX_DIGEST_WORDS],
+                    uint64_t *kernel_ns, uint64_t *transfer_ns)
+{
+    uint64_t k[VB_DEV_MAX] = { 0 }, t[VB_DEV_MAX] = { 0 };
+    uint64_t steps = 0;
+
+    for (int d = 0; d < n; d++)
+        if (passes * ctx[d].pipe_chunks > steps)
+            steps = passes * ctx[d].pipe_chunks;
+    memset(out, 0, (size_t) passes * sizeof *out);
+
+    /*
+     * One step at a time across every device, so they all run at once: at
+     * step s, collect chunk s - VB_PIPE_RING (which frees its readback slot)
+     * and queue chunk s. The device therefore always has several chunks
+     * queued ahead of the one the host is folding, and the pipeline runs
+     * straight across pass boundaries -- a pass is only a unit of
+     * verification, not a point where anything drains.
+     */
+    for (uint64_t s = 0; s < steps + VB_PIPE_RING; s++) {
+        for (int d = 0; d < n; d++) {
+            vb_dev_ctx *c = &ctx[d];
+            uint64_t total = passes * c->pipe_chunks;
+
+            if (s >= VB_PIPE_RING && s - VB_PIPE_RING < total) {
+                uint64_t done = s - VB_PIPE_RING;
+                const void *p = NULL;
+                uint64_t kn = 0, tn = 0;
+                if (c->be->pipe_wait(c, done, &p, &kn, &tn) != 0)
+                    return -1;
+                k[d] += kn;
+                t[d] += tn;
+                fold(c, p, out[done / c->pipe_chunks]);
+            }
+            if (s < total) {
+                uint64_t first, count;
+                vb_dev_slice(c->n_groups, (int) c->pipe_chunks,
+                             (int) (s % c->pipe_chunks), &first, &count);
+                if (c->be->pipe_enqueue(c, s, (size_t) first * c->group_bytes,
+                                        (size_t) count * c->group_bytes, count,
+                                        iterations,
+                                        c->local_size * partial_bytes(c),
+                                        c->n_partials * partial_bytes(c)) != 0)
+                    return -1;
+            }
+        }
+    }
+
+    *kernel_ns = *transfer_ns = 0;
+    for (int d = 0; d < n; d++) {
+        if (k[d] > *kernel_ns)
+            *kernel_ns = k[d];
+        if (t[d] > *transfer_ns)
+            *transfer_ns = t[d];
     }
     return 0;
 }

@@ -49,6 +49,15 @@ typedef struct {
        which is what OpenCL's runtime passes for a __local argument. */
     int                ocl_abi;
     unsigned long long shared_base;
+
+    /* Pipelined streaming: uploads on their own stream. */
+    vb_CUstream    cstream;
+    vb_CUdeviceptr pbuf[2], ppart[2];
+    unsigned char *ring;
+    size_t         ring_slot;
+    int            ring_pinned;
+    vb_CUevent     pu0[VB_PIPE_RING], pu1[VB_PIPE_RING];
+    vb_CUevent     pk0[VB_PIPE_RING], pk1[VB_PIPE_RING], prd[VB_PIPE_RING];
 } cu_impl;
 
 static void set_err(vb_dev_ctx *c, const char *fmt, ...)
@@ -685,6 +694,113 @@ static int cu_read(vb_dev_ctx *c, size_t bytes)
     return 0;
 }
 
+/* ---- pipelined streaming ------------------------------------------------ */
+
+static int cu_pipe_open(vb_dev_ctx *c, size_t chunk_bytes, size_t read_bytes)
+{
+    const vb_cuda *cu = vb_cuda_api();
+    cu_impl *m = c->impl;
+    if (enter(c) != 0)
+        return -1;
+    CU_CHECK(c, cu->StreamCreate(&m->cstream, 0), "cuStreamCreate");
+    for (int i = 0; i < VB_PIPE_RING; i++) {
+        CU_CHECK(c, cu->EventCreate(&m->pu0[i], 0), "cuEventCreate");
+        CU_CHECK(c, cu->EventCreate(&m->pu1[i], 0), "cuEventCreate");
+        CU_CHECK(c, cu->EventCreate(&m->pk0[i], 0), "cuEventCreate");
+        CU_CHECK(c, cu->EventCreate(&m->pk1[i], 0), "cuEventCreate");
+        CU_CHECK(c, cu->EventCreate(&m->prd[i], 0), "cuEventCreate");
+    }
+    for (int b = 0; b < 2; b++) {
+        vb_CUresult r = cu->MemAlloc(&m->pbuf[b], chunk_bytes);
+        if (r != VB_CUDA_SUCCESS) {
+            set_err(c, "chunk buffer (%.1f MiB): %s",
+                    (double) chunk_bytes / 1048576.0, vb_cuda_strerror(r));
+            return -1;
+        }
+        CU_CHECK(c, cu->MemAlloc(&m->ppart[b], read_bytes),
+                 "chunk partial buffer");
+    }
+    /* Pinned, because an asynchronous copy to pageable memory is not
+       asynchronous: the host would wait out every kernel before it could
+       queue the next chunk. */
+    m->ring_slot = read_bytes;
+    if (cu->MemHostAlloc((void **) &m->ring, VB_PIPE_RING * read_bytes, 0)
+        == VB_CUDA_SUCCESS) {
+        m->ring_pinned = 1;
+    } else {
+        m->ring = malloc(VB_PIPE_RING * read_bytes);
+        if (!m->ring) {
+            set_err(c, "out of memory for the readback ring");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int cu_pipe_enqueue(vb_dev_ctx *c, uint64_t seq, size_t offset,
+                           size_t bytes, uint64_t n_groups,
+                           uint32_t iterations, size_t shared,
+                           size_t read_bytes)
+{
+    const vb_cuda *cu = vb_cuda_api();
+    cu_impl *m = c->impl;
+    unsigned i = (unsigned) (seq % VB_PIPE_RING);
+    int b = (int) (seq % 2);
+    if (enter(c) != 0)
+        return -1;
+
+    /* Upload, once chunk seq - 2's kernel has finished reading the buffer. */
+    const unsigned char *src = (const unsigned char *)
+        (m->staging ? m->staging : c->host_slice) + offset;
+    if (seq >= 2)
+        CU_CHECK(c, cu->StreamWaitEvent(m->cstream,
+                                        m->pk1[(seq - 2) % VB_PIPE_RING], 0),
+                 "cuStreamWaitEvent");
+    CU_CHECK(c, cu->EventRecord(m->pu0[i], m->cstream), "cuEventRecord");
+    vb_CUresult r = cu->MemcpyHtoDAsync(m->pbuf[b], src, bytes, m->cstream);
+    if (r != VB_CUDA_SUCCESS) {
+        set_err(c, "chunk upload: %s", vb_cuda_strerror(r));
+        return -1;
+    }
+    CU_CHECK(c, cu->EventRecord(m->pu1[i], m->cstream), "cuEventRecord");
+
+    /* Kernel, once the upload has landed; then the partials back. */
+    CU_CHECK(c, cu->StreamWaitEvent(m->stream, m->pu1[i], 0),
+             "cuStreamWaitEvent");
+    unsigned long long groups = n_groups;
+    void *args[7] = { &m->pbuf[b], &c->blocks, &iterations, &groups,
+                      &c->repeats, &m->ppart[b], &m->shared_base };
+    unsigned grid = (unsigned) (c->global_size / c->local_size);
+    CU_CHECK(c, cu->EventRecord(m->pk0[i], m->stream), "cuEventRecord");
+    r = cu->LaunchKernel(m->fn, grid, 1, 1, (unsigned) c->local_size, 1, 1,
+                         (unsigned) shared, m->stream, args, NULL);
+    if (r != VB_CUDA_SUCCESS) {
+        set_err(c, "cuLaunchKernel (chunk): %s", vb_cuda_strerror(r));
+        return -1;
+    }
+    CU_CHECK(c, cu->EventRecord(m->pk1[i], m->stream), "cuEventRecord");
+    CU_CHECK(c, cu->MemcpyDtoHAsync(m->ring + (size_t) i * m->ring_slot,
+                                    m->ppart[b], read_bytes, m->stream),
+             "reading chunk partials");
+    CU_CHECK(c, cu->EventRecord(m->prd[i], m->stream), "cuEventRecord");
+    return 0;
+}
+
+static int cu_pipe_wait(vb_dev_ctx *c, uint64_t seq, const void **partials,
+                        uint64_t *kernel_ns, uint64_t *transfer_ns)
+{
+    const vb_cuda *cu = vb_cuda_api();
+    cu_impl *m = c->impl;
+    unsigned i = (unsigned) (seq % VB_PIPE_RING);
+    if (enter(c) != 0)
+        return -1;
+    CU_CHECK(c, cu->EventSynchronize(m->prd[i]), "waiting for a chunk");
+    *kernel_ns = elapsed_ns(cu, m->pk0[i], m->pk1[i]);
+    *transfer_ns = elapsed_ns(cu, m->pu0[i], m->pu1[i]);
+    *partials = m->ring + (size_t) i * m->ring_slot;
+    return 0;
+}
+
 static void cu_destroy(vb_dev_ctx *c)
 {
     const vb_cuda *cu = vb_cuda_api();
@@ -693,6 +809,21 @@ static void cu_destroy(vb_dev_ctx *c)
         return;
     if (cu && m->ctx && cu->CtxSetCurrent(m->ctx) == VB_CUDA_SUCCESS) {
         if (m->stream)    cu->StreamSynchronize(m->stream);
+        if (m->cstream)   cu->StreamSynchronize(m->cstream);
+        for (int i = 0; i < VB_PIPE_RING; i++) {
+            if (m->pu0[i]) cu->EventDestroy(m->pu0[i]);
+            if (m->pu1[i]) cu->EventDestroy(m->pu1[i]);
+            if (m->pk0[i]) cu->EventDestroy(m->pk0[i]);
+            if (m->pk1[i]) cu->EventDestroy(m->pk1[i]);
+            if (m->prd[i]) cu->EventDestroy(m->prd[i]);
+        }
+        for (int b = 0; b < 2; b++) {
+            if (m->pbuf[b])  cu->MemFree(m->pbuf[b]);
+            if (m->ppart[b]) cu->MemFree(m->ppart[b]);
+        }
+        if (m->ring_pinned)  cu->MemFreeHost(m->ring);
+        else                 free(m->ring);
+        if (m->cstream)   cu->StreamDestroy(m->cstream);
         if (m->k0)        cu->EventDestroy(m->k0);
         if (m->k1)        cu->EventDestroy(m->k1);
         if (m->x0)        cu->EventDestroy(m->x0);
@@ -721,5 +852,8 @@ const vb_dev_backend vb_cuda_backend = {
     .pin_staging = cu_pin_staging,
     .launch      = cu_launch,
     .read        = cu_read,
+    .pipe_open   = cu_pipe_open,
+    .pipe_enqueue = cu_pipe_enqueue,
+    .pipe_wait   = cu_pipe_wait,
     .destroy     = cu_destroy,
 };

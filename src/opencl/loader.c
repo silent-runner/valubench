@@ -103,6 +103,7 @@ int vb_ocl_load(void)
     LOAD(EnqueueNDRangeKernel,    "clEnqueueNDRangeKernel");
     LOAD(GetEventProfilingInfo,   "clGetEventProfilingInfo");
     LOAD(ReleaseEvent,            "clReleaseEvent");
+    LOAD(WaitForEvents,           "clWaitForEvents");
 
     g_state = 1;
     g_error[0] = '\0';

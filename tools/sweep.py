@@ -132,6 +132,7 @@ CSV_COLUMNS = [
     "batch_messages",
     "transfer_mode",
     "host_memory",
+    "pipeline_chunks",
     # what ran
     "kernel",
     "isa",
@@ -175,6 +176,7 @@ CSV_COLUMNS = [
     "bound_by",
     "kernel_ns_per_pass",
     "transfer_ns_per_pass",
+    "overlap_efficiency",
     # provenance
     "verified",
     "checksum",
@@ -292,16 +294,20 @@ def build_grid(args, caps):
 
     axes = itertools.product(args.algorithm, args.kernel or [None], args.where,
                              args.transfer, args.host_memory,
+                             args.pipeline_chunks,
                              args.primitives, args.compile_mode,
                              args.device_geometry, args.message_bytes,
                              args.iterations, args.working_set_kb,
                              args.threads)
 
-    for (alg, kern, where, xfer, hm, prim, cmode, geom, mb, it, ws,
+    for (alg, kern, where, xfer, hm, chunks, prim, cmode, geom, mb, it, ws,
          th) in axes:
         # Host memory only changes what a streaming upload reads from, so on a
         # resident point every value is the same measurement. Keep the first.
-        if xfer != "stream" and hm != args.host_memory[0]:
+        if xfer == "resident" and hm != args.host_memory[0]:
+            continue
+        # Likewise the chunk count, which only a pipelined upload has.
+        if xfer != "overlap" and chunks != args.pipeline_chunks[0]:
             continue
 
         # A forced kernel only computes one algorithm; pairing it with the
@@ -356,6 +362,7 @@ def build_grid(args, caps):
             "where": where,
             "transfer": xfer,
             "host_memory": hm,
+            "pipeline_chunks": chunks if xfer == "overlap" else None,
             "primitives": prim,
             "compile_mode": cmode,
             "device_geometry": geom,
@@ -425,10 +432,11 @@ def point_id(p):
     verbatim sidesteps both, and reads well enough in the CSV to be useful to a
     person scanning it.
     """
-    return ("alg=%s;kernel=%s;where=%s;transfer=%s;hm=%s;prim=%s;cm=%s;"
-            "geom=%s;mb=%s;it=%s;ws=%s;thr=%s"
+    return ("alg=%s;kernel=%s;where=%s;transfer=%s;hm=%s;chunks=%s;prim=%s;"
+            "cm=%s;geom=%s;mb=%s;it=%s;ws=%s;thr=%s"
             % (p["algorithm"], p["kernel"] or "auto", p.get("where", "any"),
                p["transfer"], p.get("host_memory") or "-",
+               p.get("pipeline_chunks") or "-",
                p.get("primitives") or "-", p.get("compile_mode") or "-",
                p.get("device_geometry") or "tuned",
                p["message_bytes"], p["iterations"], p["working_set_kb"],
@@ -526,6 +534,8 @@ def run_point(args, caps, point, refs=None):
             cmd += ["--expect", got]
     if point.get("host_memory") and caps.host_memory_modes:
         cmd += ["--host-memory", point["host_memory"]]
+    if point.get("pipeline_chunks"):
+        cmd += ["--pipeline-chunks", str(point["pipeline_chunks"])]
     # Device-only switches go only where a device kernel can honour them:
     # the binary refuses them on a run that can only pick a CPU kernel.
     device_ok = point.get("where") != "cpu" and not (
@@ -630,6 +640,7 @@ def _row_from_result(d, status, point=None):
         # What a streaming upload actually read from; blank when resident,
         # where nothing crosses the link inside the timed region.
         "host_memory": dev.get("host_memory", ""),
+        "pipeline_chunks": dev.get("pipeline_chunks", ""),
         "kernel": k["name"],
         "isa": k["isa"],
         "lanes": k["lanes"],
@@ -672,6 +683,9 @@ def _row_from_result(d, status, point=None):
         "bound_by": dev.get("bound_by", ""),
         "kernel_ns_per_pass": dev.get("kernel_ns_per_pass", ""),
         "transfer_ns_per_pass": dev.get("transfer_ns_per_pass", ""),
+        "overlap_efficiency":
+            "" if "overlap_efficiency" not in dev
+            else "%.4g" % dev["overlap_efficiency"],
         "verified": "true" if d["verification"]["verified"] else "false",
         "checksum": d["verification"]["checksum"],
         "samples": len(r["samples"]),
@@ -781,8 +795,9 @@ def balance_point(rows):
 # A tuned launch is a result, not a parameter -- the tuner can choose
 # differently at each rung -- so only a pinned one splits the groups.
 BALANCE_GROUP = ("algorithm", "kernel", "message_bytes", "working_set_bytes",
-                 "threads", "host_memory", "compile_mode", "device_compiler",
-                 "primitives", "pinned_geometry")
+                 "threads", "transfer_mode", "host_memory", "pipeline_chunks",
+                 "compile_mode", "device_compiler", "primitives",
+                 "pinned_geometry")
 
 
 def _group_field(r, f):
@@ -803,7 +818,7 @@ def report_balance(rows, out):
     """
     groups = {}
     for r in rows:
-        if r.get("transfer_mode") != "stream":
+        if r.get("transfer_mode") not in ("stream", "overlap"):
             continue
         key = tuple(_group_field(r, f) for f in BALANCE_GROUP)
         groups.setdefault(key, []).append(r)
@@ -1052,7 +1067,7 @@ def report_break_even(rows, out):
               file=out)
 
         warn = list(fit["warnings"])
-        if dev_row.get("transfer_mode") != "stream":
+        if dev_row.get("transfer_mode") not in ("stream", "overlap"):
             warn.append("device rows are not streaming, so the link is not in "
                         "the timed region and this flatters the device")
         if str(threads) == "1":
@@ -1157,6 +1172,9 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                     help="pinned, pageable -- what a streaming upload reads "
                          "from. A list makes it an axis on streaming points; "
                          "resident points ignore it.")
+    ap.add_argument("--pipeline-chunks", default="4", metavar="LIST",
+                    help="chunks per pass for --transfer overlap (default "
+                         "4); a list makes it an axis on overlap points.")
     ap.add_argument("--primitives", default="steered", metavar="LIST",
                     help="steered, neutral -- how device kernels spell the "
                          "hash primitives. A list makes it an axis; CPU "
@@ -1260,6 +1278,8 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         args.host_memory = parse_choice_list(
             args.host_memory, "--host-memory",
             caps.host_memory_modes or ("pinned",))
+        args.pipeline_chunks = parse_list(args.pipeline_chunks,
+                                          "--pipeline-chunks")
         args.primitives = parse_choice_list(
             args.primitives, "--primitives",
             caps.primitives_modes or ("steered",))
@@ -1389,7 +1409,8 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
             if not args.quiet:
                 print("  [%d/%d] %s%s msg=%d iter=%d ws=%dK thr=%d ... "
                       % (i, len(points), point["algorithm"],
-                         "/stream" if point["transfer"] == "stream" else "",
+                         "/" + point["transfer"]
+                         if point["transfer"] != "resident" else "",
                          point["message_bytes"], point["iterations"],
                          point["working_set_kb"], point["threads"]),
                       end="", file=sys.stderr, flush=True)
@@ -1443,8 +1464,12 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     # look like independent measurements.
     seen, dupes = set(), 0
     for r in rows:
-        key = (r["message_bytes"], r["iterations"], r["threads"],
-               r["working_set_bytes"])
+        # Everything the point asked for except the working set, plus the
+        # working set it got: two points that differ in anything else --
+        # kernel, transfer mode, compile mode -- are not duplicates.
+        asked = ";".join(kv for kv in r["point_id"].split(";")
+                         if not kv.startswith("ws="))
+        key = (asked, r["working_set_bytes"])
         if key in seen:
             dupes += 1
         seen.add(key)
