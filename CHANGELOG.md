@@ -17,6 +17,25 @@ outside this repository while a durable format for them is decided.
   which one a run used (`host_memory`). A platform that cannot map such a buffer
   falls back to pageable and says so there.
 
+- **Device kernels are one core per hash, in no particular API's language.**
+  `src/kernels/gpu/<alg>_device_impl.h` replaces each `.cl` file, and a program
+  is composed at run time from a dialect header, `device_primitives.h` and the
+  core, so a second API compiles the same text. How rotate, Ch and Maj become
+  instructions is decided per device vendor in one table; on NVIDIA only the
+  32-bit rotate is steered, to a PTX funnel shift, because NVIDIA's OpenCL
+  compiler misses most of SHA-1's rotates written plainly. On NVIDIA, OpenCL's
+  SHA-1 and SHA-512 compile to the same instruction count as before or a few
+  fewer, and MD5's hash loop is unchanged; its work-group reduction takes
+  eight more instructions per work-item, once per launch.
+
+### Added
+
+- **`tools/idiom_probe.py`**, which compiles each hash primitive in every
+  spelling the kernels offer, for NVRTC at any NVIDIA architecture, NVIDIA's
+  OpenCL on a present card and clang's AMDGPU backend, and counts the machine
+  instructions each costs -- alone and, with `--kernels`, inside the real
+  kernels. It is the evidence a steer has to cite.
+
 ### Fixed
 
 - **A heap overflow when `--kernel` names another algorithm's kernel.**

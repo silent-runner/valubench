@@ -228,7 +228,7 @@ Known gaps, in the order they matter:
 | [src/reference/](src/reference/) | Scalar references from RFC 1321 and FIPS 180-4; the correctness oracles every kernel is checked against |
 | [src/kernels/cpu/](src/kernels/cpu/) | CPU kernels, one translation unit per ISA — see its [README](src/kernels/cpu/README.md) for how to add one |
 | [src/kernels/cpu/md5_kernel_impl.h](src/kernels/cpu/md5_kernel_impl.h) | The multi-way kernel, written once |
-| [src/kernels/gpu/](src/kernels/gpu/) | Device kernels: complete, self-contained OpenCL |
+| [src/kernels/gpu/](src/kernels/gpu/) | Device kernels: one core per hash, compiled under OpenCL or CUDA through a dialect header |
 | [src/opencl/](src/opencl/) | The host-side OpenCL driver — loader, context, upload, launch. No hash functions |
 | [src/bench.c](src/bench.c) | Validation, autotune, timing, statistics |
 | [tools/sweep.py](tools/sweep.py) | Walks a parameter grid, writes CSV, solves for the PCIe balance point |

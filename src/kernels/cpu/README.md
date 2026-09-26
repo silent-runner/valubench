@@ -2,7 +2,7 @@
 
 Every CPU kernel lives here. One file per ISA; each is a single translation unit
 compiled with its own `-m` flags and selected at runtime. The device kernels are
-in `../gpu/`, and the OpenCL driver that runs them in `src/opencl/`.
+in `../gpu/`, and the backends that run them in `src/opencl/`.
 
 ## How it fits together
 
@@ -165,13 +165,15 @@ is touched, and neither is `registry.c`.
 **The device kernel** (optional, but the matrix expects one — see the OpenCL
 section below for what each piece does)
 
-7. Add `src/kernels/gpu/<alg>.cl`: the kernel, its constant tables, and its steps
-   written out. The Makefile picks it up by wildcard and embeds it; there is
-   nothing to commit and nothing to keep in sync.
-8. Add one line to `VB_FOR_EACH_DEVICE_ALG` in [matrix.h](matrix.h). Both the
-   `PROGRAMS` table in `src/opencl/backend.c` and the four registry rows in
-   `src/registry.c` expand from it, so the device side has no hand-written
-   tables to keep in sync.
+7. Add `src/kernels/gpu/<alg>_device_impl.h`: the kernel, its constant tables,
+   and its steps written out, using only the dialect macros and the primitives
+   (`VB_ROTL32`, `VB_CH32` and the rest) so it compiles under every API. The
+   Makefile picks it up by wildcard and embeds it; there is nothing to commit
+   and nothing to keep in sync.
+8. Add one line to `VB_FOR_EACH_DEVICE_ALG` in [matrix.h](matrix.h). The
+   backend's program table and the four registry rows in `src/registry.c`
+   expand from it, so the device side has no hand-written tables to keep in
+   sync.
 
 **Proving it works**
 
@@ -229,20 +231,37 @@ index and rotation and the list reads against RFC 1321 line by line.
 see your `-m` flags, or the dispatcher itself could be compiled with
 instructions the running CPU lacks and fault before it can check.
 
-## The OpenCL kernels
+## The device kernels
 
-`src/kernels/gpu/*.cl` are real OpenCL files — syntax highlighting, no escaping,
-readable diffs — and they are **complete**: constants and every round step are
-written out in the file. `tools/embed_cl.c` turns each into a byte array the
-binary carries, so nothing has to be installed or located at runtime.
+Each hash is one **algorithm core**, `src/kernels/gpu/<alg>_device_impl.h`, in no
+particular API's language. A program is three embedded files concatenated at run
+time: a dialect header, the primitives, and the core.
 
 ```
-    <alg>.cl  --embed_cl-->  build/<alg>_kernel.h  --#include-->  backend.c
+    dialect_opencl.h | dialect_cuda.h     address spaces, work-item indices,
+                                          barrier, scratch, constant tables
+  + device_primitives.h                   how rotate, Ch and Maj are spelled
+  + <alg>_device_impl.h                   constants and every step, written out
 ```
+
+`tools/embed_cl.c` turns each file into a byte array the binary carries, so
+nothing has to be installed or located at run time, and the backend composes
+and compiles the program for the device in front of it. The core is the same
+text whichever API compiles it, which is what makes a comparison between APIs a
+comparison of their toolchains.
+
+**Primitives are steered by vendor, not by API.** Plain C is every primitive's
+default spelling; `src/device/steer.c` replaces one with a vendor-specific
+spelling only where `tools/idiom_probe.py` shows it matching or beating plain C
+on that vendor's hardware, and the result records which steers were active. On
+the CPU each ISA gets its own round functions because the instruction sets
+differ; on a device the instruction set is the same under every API, so one
+steering per vendor keeps the APIs comparable. `--primitives neutral` turns
+every steer off.
 
 **The steps are written out, not looped.** A loop is excluded for the same
 reason it is on the CPU: a compiler that declined to unroll would collapse the
-streams into one dependency chain and under-report the device. The `.cl` file
+streams into one dependency chain and under-report the device. The core
 expands the *stream* dimension through its `EACH` macro, and the *step*
 dimension is the list of `EACH` lines itself.
 
@@ -251,10 +270,10 @@ Both were once produced at run time by an assembler inside
 place: the schedules are frozen standards, so a tool that recomputed them on
 every build was machinery around a constant. What the move did earn was
 `backend.c` having no algorithm knowledge at all, and that is worth keeping —
-everything hash-specific on the device side is now in the `.cl` file.
+everything hash-specific on the device side is in the core.
 
 **The embedded headers are not committed.** They land in `build/` and are
-rebuilt whenever a `.cl` file is newer. The output is a pure function of its
+rebuilt whenever a source is newer. The output is a pure function of its
 input and `embed_cl` needs nothing but a C compiler, which the build already
 requires, so a checked-in copy could only ever be a second source of truth to
 keep in sync. It did not stay in sync: a `check-embed` target existed solely to

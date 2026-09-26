@@ -1,12 +1,14 @@
 /*
- * md5.cl -- the OpenCL MD5 kernel.
+ * md5_device_impl.h -- the MD5 device kernel, in no particular dialect.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
- * A real .cl file, not a C string: editable with syntax highlighting and no
- * escaping. tools/embed_cl.c turns it into a byte array the binary carries, so
- * nothing has to be installed or located at run time.
+ * One of three algorithm cores (with sha1_device_impl.h and
+ * sha512_device_impl.h), mirroring md5_kernel_impl.h on the CPU side. It is
+ * compiled after a dialect header -- dialect_opencl.h or dialect_cuda.h -- and
+ * device_primitives.h, which the host concatenates at run time, so it includes
+ * nothing and names no API: the same text is what OpenCL and CUDA compile.
  *
  * Complete as it stands. The round constants and all 64 steps are written out
  * below, because MD5 is a frozen standard -- RFC 1321 is not going to gain a
@@ -30,12 +32,11 @@
  * the corpus stays free to serve the memory axis.
  */
 
-#define ROTL(x, n)   rotate((uint)(x), (uint)(n))
-/* bitselect(a,b,c) picks b where c has 1 bits, a where 0 -- one instruction on
-   AMD (BFI_INT) and NVIDIA (LOP3.LUT), the GPU equivalent of the AVX-512
-   vpternlogd win described in docs/research.md 4.1. */
-#define MD5F(x, y, z) bitselect((z), (y), (x))
-#define MD5G(x, y, z) bitselect((y), (x), (z))
+/* F and G are the selection function Ch in two argument orders; how Ch becomes
+   an instruction is device_primitives.h's business. H and I are left plain for
+   the compiler to fuse. */
+#define MD5F(x, y, z) VB_CH32((x), (y), (z))
+#define MD5G(x, y, z) VB_CH32((z), (x), (y))
 #define MD5H(x, y, z) ((x) ^ (y) ^ (z))
 #define MD5I(x, y, z) ((y) ^ ((x) | ~(z)))
 
@@ -43,7 +44,7 @@
 
 #define STEP(f, a, b, c, d, k, j, t, s)                 \
     a[k] = a[k] + f(b[k], c[k], d[k]) + W(k, j) + T[t]; \
-    a[k] = ROTL(a[k], s);                               \
+    a[k] = VB_ROTL32(a[k], s);                          \
     a[k] = a[k] + b[k];
 
 /* Streams are expanded by macro, never by a loop -- if a loop failed to unroll
@@ -72,7 +73,7 @@
  * against the scalar reference by `make check`, so a single wrong digit fails
  * the build's correctness gate rather than producing a fast wrong answer.
  */
-__constant uint T[64] = {
+VB_CONST_TABLE vb_u32 T[64] = {
     0xd76aa478u, 0xe8c7b756u, 0x242070dbu, 0xc1bdceeeu,
     0xf57c0fafu, 0x4787c62au, 0xa8304613u, 0xfd469501u,
     0x698098d8u, 0x8b44f7afu, 0xffff5bb1u, 0x895cd7beu,
@@ -91,38 +92,39 @@ __constant uint T[64] = {
     0xf7537e82u, 0xbd3af235u, 0x2ad7d2bbu, 0xeb86d391u,
 };
 
-__kernel
-void vb_md5(__global const uint *corpus,
-            const uint blocks,
-            const uint iterations,
-            const ulong n_groups,
-            const uint repeats,
-            __global uint4 *partials,
-            __local uint4 *scratch)
+VB_KERNEL vb_md5(VB_GLOBAL const vb_u32 *corpus,
+                 const vb_u32 blocks,
+                 const vb_u32 iterations,
+                 const vb_u64 n_groups,
+                 const vb_u32 repeats,
+                 VB_GLOBAL vb_u32 *partials
+                 VB_SCRATCH_PARAM(vb_u32, scratch))
 {
-    const size_t gid  = get_global_id(0);
-    const size_t lid  = get_local_id(0);
+    VB_SCRATCH_DECL(vb_u32, scratch)
+
+    const size_t gid  = VB_GLOBAL_ID();
+    const size_t lid  = VB_LOCAL_ID();
     const size_t lane = gid % LANES;
 
     const size_t slot_words  = (size_t)blocks * 16 * LANES;
     const size_t block_words = 16 * LANES;
 
-    const size_t g_stride = get_global_size(0) / LANES;
+    const size_t g_stride = VB_GLOBAL_SIZE() / LANES;
 
-    uint4 acc = (uint4)(0, 0, 0, 0);
+    vb_u32 acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
 
     /* Sweep the corpus `repeats` times. This is how the device gets saturated
        when the working set is deliberately small: work is amplified without
        growing the footprint. `repeats` is always odd, so XORing every pass
        leaves the single-pass checksum intact -- an even count would cancel to
        zero and silently weaken verification. */
-    for (uint rep = 0; rep < repeats; rep++)
+    for (vb_u32 rep = 0; rep < repeats; rep++)
     for (size_t g = gid / LANES; g < n_groups; g += g_stride) {
-        __global const uint *slot[STREAMS];
-        __global const uint *wp[STREAMS];
-        uint wv[STREAMS][4];
-        uint h0[STREAMS], h1[STREAMS], h2[STREAMS], h3[STREAMS];
-        uint A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS];
+        VB_GLOBAL const vb_u32 *slot[STREAMS];
+        VB_GLOBAL const vb_u32 *wp[STREAMS];
+        vb_u32 wv[STREAMS][4];
+        vb_u32 h0[STREAMS], h1[STREAMS], h2[STREAMS], h3[STREAMS];
+        vb_u32 A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS];
 
         for (int k = 0; k < STREAMS; k++) {
             slot[k] = corpus + (g * STREAMS + k) * slot_words + lane;
@@ -132,13 +134,13 @@ void vb_md5(__global const uint *corpus,
             wv[k][3] = slot[k][3 * LANES];
         }
 
-        for (uint it = 0; it < iterations; it++) {
+        for (vb_u32 it = 0; it < iterations; it++) {
             for (int k = 0; k < STREAMS; k++) {
                 h0[k] = 0x67452301u; h1[k] = 0xefcdab89u;
                 h2[k] = 0x98badcfeu; h3[k] = 0x10325476u;
             }
 
-            for (uint b = 0; b < blocks; b++) {
+            for (vb_u32 b = 0; b < blocks; b++) {
                 for (int k = 0; k < STREAMS; k++) {
                     wp[k] = slot[k] + (size_t)b * block_words;
                     if (b > 0) {
@@ -229,22 +231,31 @@ void vb_md5(__global const uint *corpus,
             }
         }
 
-        for (int k = 0; k < STREAMS; k++)
-            acc ^= (uint4)(h0[k], h1[k], h2[k], h3[k]);
+        for (int k = 0; k < STREAMS; k++) {
+            acc0 ^= h0[k]; acc1 ^= h1[k];
+            acc2 ^= h2[k]; acc3 ^= h3[k];
+        }
     }
 
-    /* Reduce within the work-group so only one uint4 per group crosses the bus.
-       A partial per work-item would put megabytes of readback inside the timed
-       region and corrupt the very PCIe measurement this exists to make. */
-    scratch[lid] = acc;
-    barrier(CLK_LOCAL_MEM_FENCE);
+    /* Reduce within the work-group so only one digest per group crosses the
+       bus. A partial per work-item would put megabytes of readback inside the
+       timed region and corrupt the very PCIe measurement this exists to make.
+       Four scalar words rather than a uint4, which CUDA does not construct the
+       same way; the layout in memory is identical. */
+    scratch[lid * 4 + 0] = acc0;
+    scratch[lid * 4 + 1] = acc1;
+    scratch[lid * 4 + 2] = acc2;
+    scratch[lid * 4 + 3] = acc3;
+    VB_BARRIER();
 
-    for (size_t s = get_local_size(0) / 2; s > 0; s >>= 1) {
+    for (size_t s = VB_LOCAL_SIZE() / 2; s > 0; s >>= 1) {
         if (lid < s)
-            scratch[lid] ^= scratch[lid + s];
-        barrier(CLK_LOCAL_MEM_FENCE);
+            for (int j = 0; j < 4; j++)
+                scratch[lid * 4 + j] ^= scratch[(lid + s) * 4 + j];
+        VB_BARRIER();
     }
 
     if (lid == 0)
-        partials[get_group_id(0)] = scratch[0];
+        for (int j = 0; j < 4; j++)
+            partials[VB_GROUP_ID() * 4 + j] = scratch[j];
 }

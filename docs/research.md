@@ -756,8 +756,8 @@ Resolved in discussion on 2026-08-16, before implementation began.
    everywhere — which is the whole argument for picking the strict licence
    before writing anything. Sources carry an SPDX tag rather than a copyright
    line, so the holder is named in one file. Generated headers carry no notice
-   at all: they are gitignored, never redistributed as source, and the `.cl`
-   files they come from are tagged.
+   at all: they are gitignored, never redistributed as source, and the kernel
+   sources they come from are tagged.
 
    Noted for the record, from when the choice was public domain: CC0 1.0 has
    stronger standing in jurisdictions that do not recognise dedication to the
