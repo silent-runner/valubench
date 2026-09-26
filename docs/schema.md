@@ -193,7 +193,8 @@ hash.
 `device_driver`, `platform`, `pci_address`, `primitives`, `steers`,
 `geometry_source`, `global_work`, `local_work`, `sweeps_per_launch`,
 `transfer_mode`, `host_memory`, `pipeline_chunks`, `overlap_efficiency`,
-`kernel_busy_pct`, `transfer_busy_pct`,
+`gpu_mhz_min`, `gpu_mhz_max`, `gpu_throttle`, `kernel_busy_pct`,
+`transfer_busy_pct`,
 `transfer_gbytes_per_sec`, `compute_transfer_ratio` and `bound_by` all describe
 a host-to-device transfer, and a CPU kernel reads the corpus out of the memory
 it is already running in. The CSV always carries the columns so that CPU and
