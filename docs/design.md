@@ -126,9 +126,9 @@ intensity knob. That property was designed in for the CPU compute axis and turns
 out to be exactly what the GPU question needs.
 
 Decisions that change what N\* means, and are therefore measured explicitly:
-transfer/compute **overlap** (headline figures assume double-buffered overlap,
-since that is what a competent implementation achieves; the non-overlapped
-baseline is reported alongside), **digest readback** (checksum-only and
+transfer/compute **overlap** (`--transfer overlap` measures the double-buffered
+rate a competent implementation achieves, and `--transfer stream` the
+non-overlapped baseline beside it), **digest readback** (checksum-only and
 full-digest variants reported separately — full readback adds ~29% to bus
 traffic at 55-byte messages and ~0.4% at 4096), and **pinned vs pageable host
 memory**, which is often a 2x bandwidth difference and shifts N\* accordingly.
@@ -239,9 +239,10 @@ in it (every iteration is identical work by construction), so
 ```
 
 `sweep.py` fits both across a streaming sweep and reports the intercept, with
-r^2 as the check that the linear model held -- it has been 1.0000 on every sweep
-run so far. A geometric sweep alone would only bracket N\* to within its own
-step, which is a factor-of-two answer rather than a balance point. Separating
+r^2 as the check that the linear model held -- 1.0000 on cards that hold their
+clock, and above 0.99 on a power-capped one whose clock sags as compute takes
+more of the wall. A geometric sweep alone would only bracket N\* to within its
+own step, which is a factor-of-two answer rather than a balance point. Separating
 the fixed launch cost `a` is what makes it exact: the cruder `N / ratio`
 estimate charges that cost to compute and drifts where the fit does not
 (both).
@@ -255,11 +256,14 @@ the claim does not travel.
 Three further things about this measurement are worth stating, because they are
 what make the number trustworthy:
 
-- **The ratio answers the question for a pipelined implementation too**, even
-  though this one uploads and computes in sequence. Overlapping transfer with
-  compute can hide the smaller of the two but never the larger, so whichever
-  side exceeds 1.0 is the binding constraint either way. That is why the two
-  times are reported separately rather than folded into one throughput figure.
+- **The ratio says which side binds a pipelined implementation too.**
+  Overlapping transfer with compute can hide the smaller of the two but never
+  the larger, so whichever side exceeds 1.0 binds either way. That is why the
+  two times are reported separately rather than folded into one throughput
+  figure. Where the pipelined knee falls is another matter, measured by
+  `--transfer overlap`: a power-limited card kept busy through the uploads
+  clocks lower than one that idles during them, so its overlapped kernel runs at
+  the resident rate rather than the sequential one, and the knee comes earlier.
 - **`repeats` must be forced to 1 in streaming mode**, and is. It amplifies
   compute without amplifying transfer, so any other value would inflate exactly
   the side of the ratio being measured. This is a correctness constraint, not a

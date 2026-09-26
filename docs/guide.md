@@ -688,8 +688,10 @@ to within its own step. But transfer is constant in the iteration count and
 kernel time is linear in it, so `sweep.py` fits both and reports the intercept
 (what that looks like).
 
-**Check `r2` before quoting N\*.** It has been 1.0000 on every sweep so far, so
-anything below about 0.98 means the linear model broke — the corpus fell out of
+**Check `r2` before quoting N\*.** It has been 1.0000 on cards that hold their
+clock and above 0.99 on the power-capped RTX PRO 2000, whose clock sags as the
+kernel takes more of the wall and so bends the line slightly. Anything below
+about 0.98 means the linear model broke — the corpus fell out of
 a cache partway up the sweep, or the launches were too short to time. The tool
 flags that, and flags a transfer rate that moved more than 15%. A fit that did
 not hold is not a balance point.
@@ -706,11 +708,69 @@ doubling the corpus moved it measurably, because compute scales linearly while
 the achieved link rate does not (both points). Quote the
 working set with it.
 
-**The ratio answers the question for a pipelined implementation too**, even
-though this one uploads and computes in sequence — overlapping the two can hide
-the smaller but never the larger, so whichever side exceeds 1.0 binds either
-way. That is why the two times are reported separately rather than folded into
-one number.
+**The ratio says which side binds a pipelined implementation too** —
+overlapping the two hides the smaller and never the larger — which is why the
+two times are reported separately rather than folded into one number. It does
+not say exactly where the knee falls once they do overlap; that is measured
+directly.
+
+### The sustained rate: overlapped streaming
+
+`--transfer stream` uploads a pass and then hashes it, so the link and the
+device take turns. `--transfer overlap` does what a pipelined application does:
+each pass goes up in chunks on a second queue while the earlier chunks hash, and
+the result is the sustained rate. It reports how much of the shorter side the
+pipeline hid, as `overlap_efficiency`:
+
+```
+$ valubench --kernel md5/ocl-s1 --working-set-kb 262144 --message-bytes 64 \
+      --iterations 32 --transfer overlap
+  221.21 MH/s   (median of 10 samples, 1 thread)
+  ...
+  kernel busy 71.2% of wall time
+  pipelined   4 chunks per pass; 97% of the shorter of hashing and uploading hidden
+  transfer    98.0% of wall, 28.82 GB/s host->device (255.9 MiB per pass, pinned)
+  bound by    TRANSFER  (compute/transfer = 0.73)
+```
+
+Sweep both modes over one ladder and graph hashes per second against
+iterations:
+
+```
+$ ./tools/sweep.py --algorithm md5 --kernel md5/ocl-s1 --transfer stream,overlap \
+      --message-bytes 64 --working-set-kb 262144 \
+      --iterations 1,2,4,8,12,16,24,32,48,64,96,128,256 --csv curve.csv
+```
+
+Overlapped, the rate sits flat on the link's ceiling — messages over upload
+time — until the kernel takes as long as the upload, then falls as 1/N with the
+kernel. That corner is the knee a pipelined application sees, and the sweep fits
+N\* for each mode separately. The sequential rate runs below both lines, paying
+for the two in turn; the gap is widest at the knee, where overlap can at most
+double the rate.
+
+**Predict the overlapped rate from the resident rate, not from the sequential
+kernel time.** The obvious prediction is messages over the larger of the
+sequential run's kernel and upload times. On the link side it holds. Past the
+knee it can run high: a power-limited card kept busy through the uploads clocks
+lower than one that rests during them, so the overlapped kernel runs slower than
+the sequential one — by up to about a sixth on a 70 W RTX PRO 2000, most for MD5
+and least for SHA-512 (`ryzen9950x-rtxpro2000-overlap-20260926`). It runs at
+the speed `--transfer resident` measures, which keeps the card as busy with
+nothing on the link, so the smaller of the link rate and the resident rate is
+the better prediction. A card with power headroom should show little difference
+between the two.
+
+`--pipeline-chunks` sets how many pieces each pass goes up in (default 4). More
+chunks shorten the stretch of each timed sample that cannot overlap, and each
+one costs a launch: the default was within about 1% of the best count at every
+point measured there, and 16 cost several percent where compute binds.
+
+**Use longer samples for overlap.** Each timed sample starts with the pipeline
+empty, so the first chunk's upload overlaps nothing, and a short sample pays
+for that in full. Where compute binds, the default 100 ms samples came in a few
+percent under what the pipeline sustains and `--time-ms 1000` within about 1%
+(same capture); where the link binds it barely matters.
 
 ### Break-even: does the accelerator beat the CPU you already own?
 
