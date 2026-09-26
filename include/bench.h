@@ -224,7 +224,8 @@ typedef struct {
     unsigned backend_mask;
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
     vb_host_memory host_memory; /* what a streaming upload reads from */
-    unsigned pipeline_chunks;   /* --pipeline-chunks, for VB_TRANSFER_OVERLAP */
+    unsigned pipeline_chunks;   /* --pipeline-chunks, for VB_TRANSFER_OVERLAP;
+                                   0 chooses per device */
     vb_where where;             /* which kernels autotune may pick from */
     double   cov_threshold;     /* result flagged unstable above this */
     int      pin_cpu;           /* pin worker threads to distinct cores */

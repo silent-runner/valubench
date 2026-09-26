@@ -442,7 +442,8 @@ def point_id(p):
             "cm=%s;geom=%s;mb=%s;it=%s;ws=%s;thr=%s"
             % (p["algorithm"], p["kernel"] or "auto", p.get("where", "any"),
                p["transfer"], p.get("host_memory") or "-",
-               p.get("pipeline_chunks") or "-",
+               p.get("pipeline_chunks") or
+               ("auto" if p["transfer"] == "overlap" else "-"),
                p.get("primitives") or "-", p.get("compile_mode") or "-",
                p.get("device_geometry") or "tuned",
                p["message_bytes"], p["iterations"], p["working_set_kb"],
@@ -1181,9 +1182,10 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                     help="pinned, pageable -- what a streaming upload reads "
                          "from. A list makes it an axis on streaming points; "
                          "resident points ignore it.")
-    ap.add_argument("--pipeline-chunks", default="4", metavar="LIST",
-                    help="chunks per pass for --transfer overlap (default "
-                         "4); a list makes it an axis on overlap points.")
+    ap.add_argument("--pipeline-chunks", default=None, metavar="LIST",
+                    help="chunks per pass for --transfer overlap (default: "
+                         "the binary's choice, one unless device memory is "
+                         "short); a list makes it an axis on overlap points.")
     ap.add_argument("--primitives", default="steered", metavar="LIST",
                     help="steered, neutral -- how device kernels spell the "
                          "hash primitives. A list makes it an axis; CPU "
@@ -1287,8 +1289,11 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         args.host_memory = parse_choice_list(
             args.host_memory, "--host-memory",
             caps.host_memory_modes or ("pinned",))
-        args.pipeline_chunks = parse_list(args.pipeline_chunks,
-                                          "--pipeline-chunks")
+        # None leaves the count to the binary, which sizes it to the device;
+        # the CSV records what it chose.
+        args.pipeline_chunks = (parse_list(args.pipeline_chunks,
+                                           "--pipeline-chunks")
+                                if args.pipeline_chunks else [None])
         args.primitives = parse_choice_list(
             args.primitives, "--primitives",
             caps.primitives_modes or ("steered",))
@@ -1367,6 +1372,8 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                 extra += " geometry=%s" % p["device_geometry"]
             if p.get("primitives") == "neutral":
                 extra += " primitives=neutral"
+            if p.get("pipeline_chunks"):
+                extra += " chunks=%d" % p["pipeline_chunks"]
             print("  %3d  %-7s %-9s kernel=%-14s message_bytes=%-7d "
                   "iterations=%-5d working_set_kb=%-8d threads=%d%s"
                   % (i, p["algorithm"], p["transfer"],

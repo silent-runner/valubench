@@ -133,6 +133,9 @@ message length), `kernels` (each with isa, lanes, streams, `where`, and
 `available` on this machine), the `opencl` object, and `backends` and `devices`
 as `--list-devices --json` gives them.
 
+A default of 0 means "chosen at run time": `threads` one per allowed CPU,
+`pipeline_chunks` per device, recorded in each result as the count used.
+
 It exists so that tooling asks rather than assumes. Every fact in it was once
 transcribed into `sweep.py`, and the transcription drifted — the per-algorithm
 minimum message length was carried as a single constant, which silently skipped

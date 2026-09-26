@@ -765,12 +765,15 @@ The pipeline runs as one stream for the whole measurement, and each timed
 sample is cut from it where a pass completes, so no sample pays for the
 pipeline filling or draining and the sample length does not move the result.
 
-`--pipeline-chunks` sets how many pieces each pass goes up in (default 4).
-With two device buffers even one chunk overlaps, each pass uploading while the
-one before it hashes, and every extra chunk is another, smaller launch: where
-compute binds on the RTX PRO 2000, one chunk ran a few percent faster than
-four, and where the link binds they were the same. Fewer chunks cost device
-memory instead -- two buffers, each one chunk long.
+`--pipeline-chunks` sets how many pieces each pass goes up in. By default it
+is one: with two device buffers even one chunk overlaps, each pass uploading
+while the one before it hashes, and every extra chunk is only another, smaller
+launch. On the RTX PRO 2000 four chunks ran a few percent slower than one where
+compute binds at 256 MiB, and up to a quarter slower at 4 MiB, where the pieces
+are too small to fill the card; where the link binds they were level. One
+chunk does cost device memory -- two buffers each a whole pass long -- so the
+default splits a pass only when that pair would take more than a quarter of
+the device's memory. The JSON and the sweep CSV record the count a run used.
 
 ### Break-even: does the accelerator beat the CPU you already own?
 
