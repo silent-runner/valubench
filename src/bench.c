@@ -1301,6 +1301,11 @@ const vb_kernel *vb_autotune(const vb_config *cfg, int verbose,
         if ((cfg->where == VB_WHERE_CPU && k->device) ||
             (cfg->where == VB_WHERE_DEVICE && !k->device))
             continue;
+        /* Naming device APIs asks for a device kernel from one of them, so
+           the CPU kernels drop out as well. */
+        if (cfg->backend_mask &&
+            (!k->device || !(cfg->backend_mask & (1u << k->backend))))
+            continue;
 
         if (!k->available()) {
             if (verbose)

@@ -378,3 +378,41 @@ jobs:
           ./build/valubench --kernel md5/ocl-s1 --dump-device-code dump \
             --samples 1 --time-ms 20 --warmup-ms 0 >/dev/null
           test -s dump/md5-s1.opencl.d0.cl && test -s dump/md5-s1.opencl.d0.log
+
+  # CUDA kernels need NVIDIA hardware to run, which no runner has. But NVRTC
+  # compiles without a device, and the CUDA spelling of the shared kernel
+  # sources is the one part of the CUDA path that could otherwise rot unseen.
+  # The pip wheel provides NVRTC alone, with no driver -- which also checks
+  # that the binary reports CUDA unavailable rather than failing to start.
+  cuda-nvrtc:
+    runs-on: ubuntu-latest
+    name: cuda dialect (nvrtc)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install NVRTC from its wheel
+        run: |
+          python3 -m venv "$RUNNER_TEMP/nv"
+          "$RUNNER_TEMP/nv/bin/pip" install --quiet nvidia-cuda-nvrtc
+          so=$(find "$RUNNER_TEMP/nv" -name 'libnvrtc.so.*' ! -name '*builtins*' | head -1)
+          test -n "$so" || { echo "FAIL: the wheel installed no libnvrtc"; exit 1; }
+          echo "LD_LIBRARY_PATH=$(dirname "$so")" >> "$GITHUB_ENV"
+
+      - name: build
+        run: make -j$(nproc)
+
+      - name: every kernel's CUDA spelling must compile
+        run: |
+          out=$(make -s check-nvrtc)
+          echo "$out"
+          # The test skips, and passes, without libnvrtc; here that would
+          # mean the wheel did not load, which is a failure.
+          echo "$out" | grep -q "ok    nvrtc"
+
+      - name: without a driver, CUDA must be reported unavailable, not fatal
+        run: |
+          ./build/valubench --list-devices --json | python3 -c "
+          import json, sys
+          c = json.load(sys.stdin)['backends']['cuda']
+          assert not c['available'] and c['error'], c
+          print('  cuda unavailable:', c['error'])"

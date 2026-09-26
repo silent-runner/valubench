@@ -42,6 +42,17 @@ static int have_opencl(void)
     return cached;
 }
 
+/* The same for CUDA: the driver and NVRTC both load and a device exists. */
+static int have_cuda(void)
+{
+    static int cached = -1;
+    if (cached < 0) {
+        vb_dev_info d[VB_DEV_MAX];
+        cached = vb_backend(VB_BACKEND_CUDA)->enumerate(d, VB_DEV_MAX) > 0;
+    }
+    return cached;
+}
+
 /* ---- forward declarations, one per matrix cell -------------------------- */
 
 #define VB_DECL_KERNEL(alg, isa, st, isaname, algid, avail, lanes, lfn)     \
@@ -76,6 +87,16 @@ static vb_kernel kernels[] = {
     VB_DEV_ROW(alg, ALG, algid, entry, 2)       \
     VB_DEV_ROW(alg, ALG, algid, entry, 3)       \
     VB_DEV_ROW(alg, ALG, algid, entry, 4)
+
+    VB_FOR_EACH_DEVICE_ALG(VB_DEV_ALG)
+
+#undef VB_DEV_ROW
+
+    /* The same kernels through CUDA: the same cores, the same lane width and
+       stream counts, so the same checksum. */
+#define VB_DEV_ROW(alg, ALG, algid, entry, st)                              \
+    { VB_KNAME(alg, cuda, st), "CUDA", algid, VB_OCL_LANES, st,             \
+      NULL, have_cuda, 1, 0, VB_BACKEND_CUDA },
 
     VB_FOR_EACH_DEVICE_ALG(VB_DEV_ALG)
 

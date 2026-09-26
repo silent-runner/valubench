@@ -10,9 +10,10 @@ $ ldd build/valubench
     /lib64/ld-linux-x86-64.so.2
 ```
 
-Everything optional — OpenCL, NVML — is `dlopen`'d at runtime. A machine with no
-GPU runs the same binary and reports CPU results; nothing needs to be recompiled
-and nothing fails to start.
+Everything optional — OpenCL, CUDA, NVML — is `dlopen`'d at runtime. A machine
+with no GPU runs the same binary and reports CPU results; nothing needs to be
+recompiled and nothing fails to start. No GPU toolkit is needed to *build*,
+either: the CUDA entry points are declared in the source, as OpenCL's are.
 
 **Package names differ between distributions and drift between releases.** What
 does not drift is which *files* have to exist, so each section below states the
@@ -138,6 +139,36 @@ Verify:
 
 It explains the reason when it finds nothing, rather than just reporting none.
 
+### CUDA, optionally beside OpenCL
+
+NVIDIA cards can also be driven through CUDA, which is how the benchmark
+compares the two toolchains on one card. It needs two files, both loaded at run
+time:
+
+| file | provides |
+|---|---|
+| `libcuda.so.1` | the driver API -- ships with the NVIDIA driver |
+| `libnvrtc.so.13` (or `.12`) | NVRTC, the runtime compiler -- from a CUDA toolkit, or the `nvidia-cuda-nvrtc` Python package |
+
+**NVRTC is required, not the toolkit.** CUDA kernels are compiled at run time
+for the card in front of them, as OpenCL's are, so there is no list of
+architectures baked into the binary. A driver-only machine lists CUDA as
+unavailable and names NVRTC as the reason; OpenCL is unaffected.
+
+A toolkit's `lib64` is found under `$CUDA_HOME`, `/usr/local/cuda` or
+`/opt/cuda`. The Python package puts NVRTC in its own directory, so point the
+loader at it:
+
+```bash
+python3 -m pip install nvidia-cuda-nvrtc
+export LD_LIBRARY_PATH=$(python3 -c 'import nvidia, os; print(os.path.join(list(nvidia.__path__)[0], "cu13", "lib"))')
+```
+
+**NVRTC must not be newer than the driver** for the default `--compile-mode
+ptx-jit`, in which the driver finishes NVRTC's PTX: a driver that is older than
+the PTX refuses it, and valubench says so. `--compile-mode cubin` has NVRTC
+produce machine code the driver loads as it is, and works with a newer NVRTC.
+
 ---
 
 ## Energy measurement
@@ -245,6 +276,6 @@ environment.
 ```bash
 make config              # compiler, which ISA paths built, CL headers or not
 ./build/valubench --list          # kernels, and which are available here
-./build/valubench --list-devices  # OpenCL devices, or why there are none
+./build/valubench --list-devices  # devices and the APIs that reach them, or why none
 make check                        # known-answer vectors + every kernel
 ```

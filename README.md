@@ -231,6 +231,7 @@ Known gaps, in the order they matter:
 | [src/kernels/gpu/](src/kernels/gpu/) | Device kernels: one core per hash, compiled under OpenCL or CUDA through a dialect header |
 | [src/device/](src/device/) | What every device API shares: program composition, launch geometry, repeats, the partial fold, the device list, and the per-vendor steer table |
 | [src/opencl/](src/opencl/) | The OpenCL backend — loader, compile, upload, launch. No hash functions |
+| [src/cuda/](src/cuda/) | The CUDA backend, NVRTC-compiled at run time — the same shape as the OpenCL one |
 | [src/bench.c](src/bench.c) | Validation, autotune, timing, statistics |
 | [tools/sweep.py](tools/sweep.py) | Walks a parameter grid, writes CSV, solves for the PCIe balance point |
 | [tools/compare.py](tools/compare.py) | Diffs two result sets, gated on the verification checksum |

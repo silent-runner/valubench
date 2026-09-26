@@ -224,8 +224,46 @@ tuned one.
 
 **Seeing what was compiled.** `--dump-device-code DIR` writes each program as
 compiled: the composed source, the compiler's output where the API exposes it
-(PTX on NVIDIA's OpenCL), and a log with the build options and the compiler's
-messages -- on NVIDIA, its register report.
+(PTX on NVIDIA's OpenCL, PTX and CUBIN under CUDA), and a log with the build
+options and the compiler's messages -- on NVIDIA, its register report.
+
+### CUDA beside OpenCL
+
+On an NVIDIA card with NVRTC available (see
+[dependencies.md](dependencies.md)), the same kernels also run through CUDA, as
+`cuda-s1..s4` beside `ocl-s1..s4`. They are the same algorithm cores compiled
+from the same text, with the same steers, launched by the same harness; what
+differs is the API, its compiler and its runtime. So a CUDA figure and an
+OpenCL figure on one card are a comparison of the two toolchains and nothing
+else, and they carry the same checksum:
+
+```
+$ valubench --kernel md5/ocl-s1  | grep -E 'compiled|checksum'
+  compiled    opencl: NVIDIA CUDA, NVVM 7.0.1, driver 610.57.04 (driver)
+  verified    yes  checksum 955e84cbbc05470019604a2bd9ff2821
+$ valubench --kernel md5/cuda-s1 | grep -E 'compiled|checksum'
+  compiled    cuda: nvrtc, 13.3 (NVVM 23.0.0) (ptx-jit)
+  verified    yes  checksum 955e84cbbc05470019604a2bd9ff2821
+```
+
+**Two ways to compile, never to be mixed up.** `--compile-mode ptx-jit`, the
+default, has NVRTC emit PTX and the driver finish it -- the same final stage
+NVIDIA's OpenCL uses, so against OpenCL it isolates the language frontend.
+`--compile-mode cubin` has NVRTC finish it with the toolkit's own ptxas, a
+different compiler version. The result records which, as `compile_mode`.
+
+**Autotune chooses between APIs by measurement**, as it chooses between
+instruction sets: every available device kernel competes. `--backend cuda` or
+`--backend opencl` restricts it to one API's device kernels -- a fixed
+preference would build the answer to "which API is faster here" into the tool.
+
+To compare the two properly, pin the launch so both run the same geometry, and
+let `sweep.py` interleave them so clock drift does not land on one side:
+
+```
+$ ./tools/sweep.py --kernel md5/ocl-s1,md5/cuda-s1 --device-geometry 139264x128 \
+      --iterations 16 --message-bytes 55 --working-set-kb 16384 --csv api.csv
+```
 
 **Multiple devices run concurrently.** `--device` takes an index, a
 comma-separated list, or `all` (the default). The corpus is split into

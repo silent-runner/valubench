@@ -227,6 +227,12 @@ int  vb_dev_ctx_collect(vb_dev_ctx *c, uint64_t checksum[VB_MAX_DIGEST_WORDS]);
 
 void vb_dev_ctx_free(vb_dev_ctx *c);
 
+/* The complete program for one algorithm in one dialect -- dialect header,
+   primitives, core -- exactly as a backend compiles it, or NULL. Caller
+   frees. Exposed so a test can compile what the backends compile without a
+   device. `entry` receives the kernel's entry point name. */
+char *vb_dev_program_source(vb_alg_id alg, vb_dialect d, const char **entry);
+
 /* The i-th of n contiguous, near-equal slices of total_groups. */
 void vb_dev_slice(uint64_t total_groups, int n, int i,
                   uint64_t *first, uint64_t *count);

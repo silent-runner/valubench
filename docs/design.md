@@ -305,6 +305,14 @@ This is worth knowing up front because it shapes the whole GPU design, and
 because the obvious alternatives (SYCL, Vulkan compute, OpenMP offload) each fail
 one of the stated requirements.
 
+**A vendor API can join without breaking this, by the same trick.** CUDA is
+loaded the way OpenCL is -- `libcuda.so.1` and NVRTC `dlopen`'d, their entry
+points declared in the source rather than taken from a toolkit -- and its
+kernels are compiled at run time for the device present, from the same kernel
+source OpenCL compiles. So the build still needs only a C compiler, and a
+machine without the driver or without NVRTC simply has no CUDA kernels. It is
+additive: OpenCL stays the portable baseline, and the only API on Intel.
+
 ## 5. Instruction set generation matters more than vector width
 
 AVX-512 is not "AVX2 but twice as wide" for this workload. Two single-instruction

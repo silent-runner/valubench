@@ -200,6 +200,13 @@ typedef struct {
     size_t   pin_global;           /* --device-geometry; 0 = tune */
     size_t   pin_local;
     vb_compile_mode compile_mode;  /* --compile-mode, CUDA only */
+    int      compile_mode_given;
+    /* --backend: the device APIs autotune may pick from, one bit per
+       vb_backend_id; 0 means every one, and CPU kernels too. Naming any
+       restricts autotune to device kernels from those APIs. Selection among APIs is by
+       measurement, as among instruction sets -- a fixed preference order
+       would build the claim under test into the tool. */
+    unsigned backend_mask;
     vb_transfer_mode transfer;  /* how the corpus reaches a device */
     vb_host_memory host_memory; /* what a streaming upload reads from */
     vb_where where;             /* which kernels autotune may pick from */

@@ -738,6 +738,8 @@ void vb_report_capabilities_json(FILE *f)
     fprintf(f, "  \"primitives_modes\": [\"steered\", \"neutral\"],\n");
     fprintf(f, "  \"device_geometry\": true,\n");
     fprintf(f, "  \"dump_device_code\": true,\n");
+    fprintf(f, "  \"compile_modes\": [\"ptx-jit\", \"cubin\"],\n");
+    fprintf(f, "  \"backend_filters\": [\"any\", \"opencl\", \"cuda\"],\n");
     /* Autotune restrictions. "cpu" is what makes a CPU baseline measurable on
        a machine whose device kernel would otherwise win every probe. */
     fprintf(f, "  \"where_filters\": [\"any\", \"cpu\", \"device\"],\n");

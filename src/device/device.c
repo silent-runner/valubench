@@ -69,6 +69,16 @@ static char *compose(vb_dialect d, const char *core)
     return s;
 }
 
+char *vb_dev_program_source(vb_alg_id alg, vb_dialect d, const char **entry)
+{
+    const vb_dev_program *p = program_for(alg);
+    if (!p)
+        return NULL;
+    if (entry)
+        *entry = p->entry;
+    return compose(d, p->core);
+}
+
 /* ---- options and small helpers ------------------------------------------ */
 
 void vb_dev_options_default(vb_dev_options *o)
@@ -508,11 +518,13 @@ int vb_dev_ctx_run(vb_dev_ctx *c, uint32_t iterations,
 /* ---- the device list ---------------------------------------------------- */
 
 extern const vb_dev_backend vb_opencl_backend;
+extern const vb_dev_backend vb_cuda_backend;
 
 const vb_dev_backend *vb_backend(vb_backend_id b)
 {
     switch (b) {
     case VB_BACKEND_OPENCL: return &vb_opencl_backend;
+    case VB_BACKEND_CUDA:   return &vb_cuda_backend;
     default:                return NULL;
     }
 }

@@ -79,6 +79,13 @@ static void usage(FILE *f, const char *argv0)
 "                       cannot use it.\n"
 "  --dump-device-code DIR  write each device program as compiled -- source,\n"
 "                       intermediate code and compiler log -- into DIR.\n"
+"  --backend LIST       restrict autotune to device kernels from these APIs:\n"
+"                       opencl, cuda, comma-separated; 'any' (the default)\n"
+"                       lets every kernel, CPU or device, compete.\n"
+"  --compile-mode MODE  how CUDA kernels are compiled: 'ptx-jit' (default)\n"
+"                       has the driver finish NVRTC's PTX, as OpenCL's code\n"
+"                       is finished; 'cubin' finishes it with NVRTC's own\n"
+"                       ptxas, a different compiler version.\n"
 "  --working-set-kb K   target corpus size (default 1024). Sets how many\n"
 "                       messages are hashed, so sweeping it walks the result\n"
 "                       from L1-resident to DRAM-bound.\n"
@@ -213,6 +220,30 @@ static void list_devices(void)
                        w->driver, w->max_work_group);
         }
     }
+}
+
+/* "any", or a comma-separated list of backend names, for --backend. */
+static int parse_backends(const char *spec, vb_config *cfg)
+{
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", spec);
+    cfg->backend_mask = 0;
+    if (!strcmp(buf, "any"))
+        return 0;
+    for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
+        int found = 0;
+        for (int b = 0; b < VB_BACKEND_COUNT; b++)
+            if (!strcmp(tok, vb_backend_name((vb_backend_id) b))) {
+                cfg->backend_mask |= 1u << b;
+                found = 1;
+            }
+        if (!found) {
+            fprintf(stderr, "valubench: unknown --backend '%s' "
+                            "(any, opencl, cuda)\n", tok);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* "GLOBAL,LOCAL" for --device-geometry: two positive counts. Whether the
@@ -545,6 +576,25 @@ int main(int argc, char **argv)
                 return VB_EXIT_USAGE;
             }
             device_only = device_only ? device_only : a;
+        } else if (!strcmp(a, "--compile-mode")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            const char *m = argv[++i];
+            if (!strcmp(m, "ptx-jit")) {
+                cfg.compile_mode = VB_COMPILE_PTX_JIT;
+            } else if (!strcmp(m, "cubin")) {
+                cfg.compile_mode = VB_COMPILE_CUBIN;
+            } else {
+                fprintf(stderr, "valubench: unknown --compile-mode '%s' "
+                                "(ptx-jit, cubin)\n", m);
+                return VB_EXIT_USAGE;
+            }
+            cfg.compile_mode_given = 1;
+            device_only = device_only ? device_only : a;
+        } else if (!strcmp(a, "--backend")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            if (parse_backends(argv[++i], &cfg) != 0) return VB_EXIT_USAGE;
+            if (cfg.backend_mask)
+                device_only = device_only ? device_only : a;
         } else if (!strcmp(a, "--where")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             const char *w = argv[++i];
@@ -809,6 +859,22 @@ int main(int argc, char **argv)
                     "%u-message batch. Try a different stream count.\n",
                     k->name, k->lanes, k->streams, k->lanes * k->streams,
                     VB_BATCH_LCM);
+            return VB_EXIT_USAGE;
+        }
+        /* A kernel from an API --backend excludes, and a CUDA compile mode
+           for a kernel that is not CUDA, are contradictions of the same kind:
+           one would silently win over the other. */
+        if (k->device && cfg.backend_mask &&
+            !(cfg.backend_mask & (1u << k->backend))) {
+            fprintf(stderr, "valubench: --kernel '%s' runs through %s, which "
+                            "--backend excludes\n", k->name,
+                    vb_backend_name((vb_backend_id) k->backend));
+            return VB_EXIT_USAGE;
+        }
+        if (cfg.compile_mode_given && k->device &&
+            k->backend != VB_BACKEND_CUDA) {
+            fprintf(stderr, "valubench: --compile-mode applies to CUDA kernels, "
+                            "and '%s' is not one\n", k->name);
             return VB_EXIT_USAGE;
         }
         /* Naming a kernel and then excluding where it runs is a contradiction,
