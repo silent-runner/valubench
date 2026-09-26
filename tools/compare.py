@@ -53,7 +53,33 @@ DEFAULT_THRESHOLD = 10.0
 # What identifies a measurement. Two records with the same key measured the
 # same thing and may be compared; anything else is a different question.
 KEY_FIELDS = ("workload", "kernel", "threads", "transfer_mode",
-              "working_set_bytes")
+              "working_set_bytes", "variant")
+
+
+def device_variant(compile_mode="", compiler="", primitives="", host_memory="",
+                   geometry_source="", global_work="", local_work=""):
+    """
+    What else distinguishes two runs of one device kernel: how it was compiled
+    (and whether the code was imported), whether its primitives were steered,
+    what a streaming upload read, and a pinned launch. Two CUDA rows of one
+    sweep can differ only here, and pairing them by kernel name alone kept the
+    first and dropped the other. A tuned launch is left out of the key on
+    purpose -- the tuner can choose differently between identical runs, and
+    that is a result to compare, not a reason not to. Empty for CPU rows and
+    for files from before these existed, which therefore still pair.
+    """
+    parts = []
+    if compiler == "imported":
+        parts.append("imported")
+    elif compile_mode and compile_mode != "driver":
+        parts.append(compile_mode)
+    if primitives == "neutral":
+        parts.append("neutral")
+    if host_memory:
+        parts.append(host_memory)
+    if geometry_source == "pinned":
+        parts.append("%sx%s" % (global_work, local_work))
+    return "/".join(parts)
 
 
 class Record:
@@ -61,7 +87,7 @@ class Record:
 
     def __init__(self, workload, kernel, threads, transfer_mode,
                  working_set_bytes, hashes_per_sec, cov_percent, checksum,
-                 verified, source, cpu="", version=""):
+                 verified, source, cpu="", version="", variant=""):
         self.workload = workload
         self.kernel = kernel
         self.threads = int(threads)
@@ -74,14 +100,17 @@ class Record:
         self.source = source
         self.cpu = cpu
         self.version = version
+        self.variant = variant
 
     @property
     def key(self):
         return (self.workload, self.kernel, self.threads, self.transfer_mode,
-                self.working_set_bytes)
+                self.working_set_bytes, self.variant)
 
     def label(self):
         parts = [self.workload, self.kernel]
+        if self.variant:
+            parts.append(self.variant)
         if self.threads != 1:
             parts.append("%dt" % self.threads)
         else:
@@ -109,6 +138,11 @@ def record_from_json(doc, source):
         source=source,
         cpu=env.get("cpu", ""),
         version=b.get("version", ""),
+        variant=device_variant(
+            dev.get("compile_mode", ""), dev.get("compiler", ""),
+            dev.get("primitives", ""), dev.get("host_memory", ""),
+            dev.get("geometry_source", ""), dev.get("global_work", ""),
+            dev.get("local_work", "")),
     )
 
 
@@ -126,6 +160,11 @@ def record_from_csv_row(row, source):
         source=source,
         cpu=row.get("cpu", ""),
         version=row.get("valubench_version", ""),
+        variant=device_variant(
+            row.get("compile_mode", ""), row.get("device_compiler", ""),
+            row.get("primitives", ""), row.get("host_memory", ""),
+            row.get("geometry_source", ""), row.get("global_work", ""),
+            row.get("local_work", "")),
     )
 
 
@@ -379,9 +418,10 @@ def main():
 
     if not matched and not mismatched:
         print("compare: nothing in common between %s and %s.\n"
-              "  Points are paired by workload, kernel, threads, transfer mode "
-              "and working set;\n  a difference in any of those is a different "
-              "measurement, not a slower one." % (args.base, args.new),
+              "  Points are paired by workload, kernel, threads, transfer mode, "
+              "working set and\n  device variant (compile mode, primitives, "
+              "host memory, pinned launch);\n  a difference in any of those is "
+              "a different measurement, not a slower one." % (args.base, args.new),
               file=sys.stderr)
         return EXIT_USAGE
 

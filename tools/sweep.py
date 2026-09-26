@@ -65,6 +65,7 @@ class Capabilities:
         # which then get none of the flags.
         self.primitives_modes = tuple(doc.get("primitives_modes", ()))
         self.compile_modes = tuple(doc.get("compile_modes", ()))
+        self.import_ptx = bool(doc.get("import_ptx", False))
         self.pinned_geometry = bool(doc.get("device_geometry", False))
         # Autotune restrictions. Older binaries have no such notion, so this
         # degrades to "any" rather than failing.
@@ -525,7 +526,14 @@ def run_point(args, caps, point, refs=None):
         point["kernel"] and caps.kernels[point["kernel"]]["where"] == "cpu")
     if device_ok and point.get("primitives") and caps.primitives_modes:
         cmd += ["--primitives", point["primitives"]]
-    if (device_ok and point.get("compile_mode") and caps.compile_modes and
+    if point.get("compile_mode") == "import":
+        # OpenCL's compiled code under CUDA's runtime: the file
+        # --dump-device-code wrote for the same algorithm and stream count.
+        alg, rest = point["kernel"].split("/", 1)
+        cmd += ["--import-ptx", os.path.join(
+            args.import_ptx_dir,
+            "%s-%s.opencl.d0.ptx" % (alg, rest.rsplit("-", 1)[1]))]
+    elif (device_ok and point.get("compile_mode") and caps.compile_modes and
             (not point["kernel"] or "/cuda" in point["kernel"])):
         cmd += ["--compile-mode", point["compile_mode"]]
     if device_ok and point.get("device_geometry"):
@@ -1111,6 +1119,12 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     ap.add_argument("--compile-mode", default="ptx-jit", metavar="LIST",
                     help="ptx-jit, cubin -- how CUDA kernels are compiled. A "
                          "list makes it an axis on CUDA points.")
+    ap.add_argument("--import-ptx-dir", default=None, metavar="DIR",
+                    help="adds 'import' to the --compile-mode axis: CUDA "
+                         "points also run OpenCL's compiled code, from the "
+                         "PTX --dump-device-code wrote into DIR -- the "
+                         "compiler of one API under the runtime of the "
+                         "other.")
     ap.add_argument("--device-geometry", default=None, metavar="LIST",
                     help="pin the device launch instead of tuning it: "
                          "GLOBALxLOCAL, e.g. 139264x128, and a list makes it "
@@ -1207,6 +1221,14 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         args.compile_mode = parse_choice_list(
             args.compile_mode, "--compile-mode",
             caps.compile_modes or ("ptx-jit",))
+        if args.import_ptx_dir:
+            if not caps.import_ptx:
+                raise ValueError("--import-ptx-dir: this binary cannot "
+                                 "import PTX")
+            if not args.kernel:
+                raise ValueError("--import-ptx-dir needs --kernel: the "
+                                 "imported code is one kernel")
+            args.compile_mode.append("import")
         if args.device_geometry:
             if not caps.pinned_geometry:
                 raise ValueError("--device-geometry: this binary cannot pin "

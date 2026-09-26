@@ -70,8 +70,11 @@ outside this repository while a durable format for them is decided.
   `steers` and `geometry_source`, in the JSON and as columns of the sweep CSV,
   which also gains the launch geometry -- `global_work`, `local_work`,
   `sweeps_per_launch` -- that previously stopped at the JSON. `sweep.py` has
-  `--primitives` and `--device-geometry` axes, and runs points that differ
-  only in device API side by side, rotating the order.
+  `--primitives`, `--device-geometry` and `--compile-mode` axes (with
+  `--import-ptx-dir` adding OpenCL's own code under CUDA as a fourth arm),
+  and runs points that differ only in device API side by side, rotating the
+  order. `compare.py` pairs points by these too, where it used to keep the
+  first of two rows that differed only in them.
 - **`tools/idiom_probe.py`**, which compiles each hash primitive in every
   spelling the kernels offer, for NVRTC at any NVIDIA architecture, NVIDIA's
   OpenCL on a present card and clang's AMDGPU backend, and counts the machine
