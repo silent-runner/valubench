@@ -1174,10 +1174,12 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     ap.add_argument("--algorithm", default="md5", metavar="LIST",
                     help="md5, sha1, sha512 -- comma-separated (default md5)")
     ap.add_argument("--transfer", default="resident", metavar="LIST",
-                    help="resident, stream -- comma-separated. 'stream' puts "
-                         "the host-to-device upload inside the timed region; "
-                         "sweep --iterations against it to find where compute "
-                         "overtakes the link. No effect on CPU kernels.")
+                    help="resident, stream, overlap -- comma-separated. "
+                         "'stream' puts the host-to-device upload inside the "
+                         "timed region, and 'overlap' overlaps it with "
+                         "hashing, the sustained rate; sweep --iterations "
+                         "against them to find where compute overtakes the "
+                         "link. No effect on CPU kernels.")
     ap.add_argument("--host-memory", default="pinned", metavar="LIST",
                     help="pinned, pageable -- what a streaming upload reads "
                          "from. A list makes it an axis on streaming points; "

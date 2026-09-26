@@ -148,15 +148,15 @@ time:
 | file | provides |
 |---|---|
 | `libcuda.so.1` | the driver API -- ships with the NVIDIA driver |
-| `libnvrtc.so.13` (or `.12`) | NVRTC, the runtime compiler -- from a CUDA toolkit, or the `nvidia-cuda-nvrtc` Python package |
+| `libnvrtc.so.13` (or `.12`, `.11.2`) | NVRTC, the runtime compiler -- from a CUDA toolkit, or the `nvidia-cuda-nvrtc` Python package |
 
 **NVRTC is required, not the toolkit.** CUDA kernels are compiled at run time
 for the card in front of them, as OpenCL's are, so there is no list of
 architectures baked into the binary. A driver-only machine lists CUDA as
 unavailable and names NVRTC as the reason; OpenCL is unaffected.
 
-A toolkit's `lib64` is found under `$CUDA_HOME`, `/usr/local/cuda` or
-`/opt/cuda`. The Python package puts NVRTC in its own directory, so point the
+A toolkit's `lib64` is found under `$CUDA_HOME`, `$CUDA_PATH`,
+`/usr/local/cuda` or `/opt/cuda`. The Python package puts NVRTC in its own directory, so point the
 loader at it:
 
 ```bash

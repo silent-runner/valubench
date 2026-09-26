@@ -9,7 +9,8 @@ the hardware computed the right answer while doing it.
 
 BSD 3-Clause. Builds with a C11 compiler and make. No configure
 step, no network access at build or run time, and the binary links only libc —
-OpenCL and NVML are `dlopen`'d, so the same build runs with or without a GPU.
+OpenCL, CUDA, NVRTC and NVML are `dlopen`'d, so the same build runs with or
+without a GPU.
 
 ```
 sudo apt install build-essential      # that is the whole requirement for CPU
@@ -103,7 +104,7 @@ message words to eighty rather than permuting them. SHA-512 costs more again:
 80 rounds of 64-bit work with four sigma functions, at half the lanes per
 register.
 
-All three have OpenCL kernels, which makes one comparison possible that a
+All three have device kernels, which makes one comparison possible that a
 single-algorithm benchmark would hide — **the GPU's advantage is not uniform**.
 Both sides slow down on SHA-512 — AVX2's lanes halve at 64 bits too — but the
 GPU gives up substantially more of its relative footing, because consumer GPU
@@ -188,14 +189,14 @@ between them is evidence rather than a tautology.
 
 ## Status
 
-**Validated on nine CPU microarchitectures and four GPUs**, all producing the
+**Validated on nine CPU microarchitectures and five GPUs**, all producing the
 same verification fingerprints: Gracemont, Cascade Lake, Zen 5 (server and
 desktop), Milan, Ice Lake-SP, Sapphire Rapids, Neoverse V1 and Neoverse V2, an
-Intel iGPU, an NVIDIA A10, an A100 and two H100s.
-Scalar, SSE2, AVX2, AVX-512, SHA-NI, NEON, SVE and SVE2 CPU kernels; OpenCL
-device kernels for all three algorithms; resident and streaming transfer;
-multi-device; autotune; statistics; energy where counters allow; JSON and human
-output. GCC 13.3 through 16.2 and Clang 18.1 through 22.1 all build clean under
+Intel iGPU, an NVIDIA A10, an A100, two H100s and an RTX PRO 2000 Blackwell.
+Scalar, SSE2, AVX2, AVX-512, SHA-NI, NEON, SVE and SVE2 CPU kernels; device
+kernels for all three algorithms from one source, under OpenCL and, on NVIDIA
+with NVRTC, CUDA; resident, streaming and overlapped transfer; multi-device;
+autotune; statistics; energy where counters allow; JSON and human output. GCC 13.3 through 16.2 and Clang 18.1 through 22.1 all build clean under
 the full warning set and produce identical checksums, and CI additionally
 cross-compiles for AArch64 and runs the NEON kernels under emulation.
 
@@ -206,6 +207,9 @@ Known gaps, in the order they matter:
   width and instruction-set generation stay conflated on that side.
 - **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
   Rusticl have never run this.
+- **CUDA has run on one card.** The backend is validated on the RTX PRO 2000
+  (sm_120) only; CI compiles its kernels with NVRTC but has no NVIDIA driver to
+  run them, and a second architecture is still owed.
 - **Transfer figures in older captures are pageable memory.** Streaming now
   uploads from pinned memory by default; captures taken before that read
   pageable memory, which reached roughly half the link rate on an A10.
