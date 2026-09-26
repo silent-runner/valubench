@@ -39,6 +39,17 @@ outside this repository while a durable format for them is decided.
 
 ### Added
 
+- **A CUDA backend.** On an NVIDIA card with NVRTC available, every device
+  kernel also runs through CUDA as `md5/cuda-s1` and its siblings: the same
+  cores, compiled at run time by NVRTC for the device present, launched by the
+  same harness, verified against the same checksum. Nothing from a CUDA
+  toolkit is needed to build -- libcuda and libnvrtc are loaded at run time
+  and their entry points declared in the source -- and a machine without them
+  reports CUDA unavailable. `--compile-mode` chooses between PTX finished by
+  the driver (`ptx-jit`, the default) and machine code from NVRTC's own ptxas
+  (`cubin`). Autotune weighs CUDA and OpenCL kernels by measurement;
+  `--backend` restricts it to one API. CI compiles every kernel's CUDA
+  spelling with NVRTC from its pip wheel, without a GPU.
 - **`--device-geometry GLOBAL,LOCAL`** pins the device launch instead of
   tuning it, and refuses one the kernel cannot use. The tuner picks by short
   probes and can land differently between identical runs; comparing two

@@ -246,6 +246,12 @@ endif
 OCL_OBJS := $(BUILD)/ocl_loader.o $(BUILD)/ocl_backend.o
 LDLIBS   += -ldl
 
+# CUDA the same way: libcuda and libnvrtc are dlopen'd, the entry points are
+# declared in include/vb_cuda.h, and nothing from a CUDA toolkit is needed to
+# build. Kernels compile at run time for the device present, so there is no
+# architecture list here to bake the build machine into a result.
+CUDA_OBJS := $(BUILD)/cuda_loader.o $(BUILD)/cuda_backend.o
+
 # What every device backend shares: the steer table now, and the device layer
 # the backends plug into.
 DEV_OBJS := $(patsubst src/device/%.c,$(BUILD)/device_%.o,\
@@ -263,13 +269,14 @@ CORE_OBJS := $(REF_OBJS) \
              $(BUILD)/algorithm.o $(BUILD)/workload.o $(BUILD)/cpu_features.o \
              $(BUILD)/bench.o $(BUILD)/sysinfo.o $(BUILD)/report.o \
              $(BUILD)/registry.o $(BUILD)/power.o $(KERNEL_OBJS) $(OCL_OBJS) \
-             $(DEV_OBJS)
+             $(CUDA_OBJS) $(DEV_OBJS)
 
 HDRS := include/hashes.h include/sha512_const.h \
         include/algorithm.h include/valubench.h \
         include/bench.h include/sysinfo.h include/report.h \
         include/cpu_features.h include/vb_cl.h include/opencl.h \
-        include/power.h include/device_steer.h include/device.h
+        include/power.h include/device_steer.h include/device.h \
+        include/vb_cuda.h include/cuda_loader.h
 # Every kernel translation unit depends on the whole template set and on the
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
@@ -281,7 +288,7 @@ KHDRS := $(wildcard src/kernels/cpu/*.h)
 # in zero seconds and the next step died on a binary that was never linked.
 .DEFAULT_GOAL := all
 
-.PHONY: all test check check-kernels clean config need-python3
+.PHONY: all test check check-kernels check-nvrtc clean config need-python3
 
 # Three checks read the binary's JSON with python3. Without it they used to
 # fail as if the binary were at fault -- check-pinning reported "no pinned_cpus
@@ -383,6 +390,9 @@ $(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 $(BUILD)/device_%.o: src/device/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
 
+$(BUILD)/cuda_%.o: src/cuda/%.c $(HDRS)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -423,6 +433,14 @@ test: $(BUILD)/test_hashes
 
 check-kernels: $(BUILD)/test_kernels
 	$(BUILD)/test_kernels
+
+# The CUDA spelling of every kernel must compile, with no GPU: NVRTC runs
+# anywhere libnvrtc loads. Skips, and passes, where it does not.
+$(BUILD)/test_nvrtc: tests/test_nvrtc.c $(CORE_OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_nvrtc.c $(CORE_OBJS) $(LDLIBS)
+
+check-nvrtc: $(BUILD)/test_nvrtc
+	@$(BUILD)/test_nvrtc
 
 # The scalar rung is the denominator of every ISA ratio reported, so verify it
 # is scalar rather than trusting KFLAGS_scalar to have been honoured. Uses the
@@ -566,7 +584,7 @@ check: test check-kernels check-scalar check-checkpoints check-threadfail \
        check-virt \
        check-config \
        check-working-set \
-       check-report check-contract
+       check-report check-contract check-nvrtc
 
 clean:
 	rm -rf $(BUILD)

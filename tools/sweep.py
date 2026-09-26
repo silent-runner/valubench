@@ -1264,12 +1264,20 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
 
     if args.dry_run:
         for i, p in enumerate(points, 1):
+            extra = ""
+            if backend_of(p["kernel"]) == "cuda":
+                extra += " compile=%s" % p["compile_mode"]
+            if p.get("device_geometry"):
+                extra += " geometry=%s" % p["device_geometry"]
+            if p.get("primitives") == "neutral":
+                extra += " primitives=neutral"
             print("  %3d  %-7s %-9s kernel=%-14s message_bytes=%-7d "
-                  "iterations=%-5d working_set_kb=%-8d threads=%d"
+                  "iterations=%-5d working_set_kb=%-8d threads=%d%s"
                   % (i, p["algorithm"], p["transfer"],
                      p["kernel"] or ("auto/" + p["where"]),
                      p["message_bytes"], p["iterations"],
-                     p["working_set_kb"], p["threads"]), file=sys.stderr)
+                     p["working_set_kb"], p["threads"], extra),
+                  file=sys.stderr)
         return 0
 
     # --- resume ----------------------------------------------------------

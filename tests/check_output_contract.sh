@@ -64,7 +64,8 @@ import json, sys
 d = json.load(sys.stdin)
 need = ("schema", "benchmark", "algorithms", "kernels", "limits",
         "exit_codes", "transfer_modes", "host_memory_modes",
-        "primitives_modes", "backends", "devices")
+        "primitives_modes", "compile_modes", "backend_filters",
+        "backends", "devices")
 missing = [k for k in need if k not in d]
 if missing:
     print("  FAIL  output-contract  capabilities missing: %s" % ", ".join(missing))
@@ -161,6 +162,18 @@ expect_exit 2 "geometry with --where cpu" \
     "$BIN" --device-geometry 4096,64 --where cpu
 expect_exit 2 "neutral primitives on a CPU kernel" \
     "$BIN" --primitives neutral --kernel md5/scalar-s1
+expect_exit 2 "unknown backend"       "$BIN" --backend metal
+expect_exit 2 "unknown compile mode"  "$BIN" --compile-mode fatbin
+expect_exit 2 "backend with --where cpu" "$BIN" --backend cuda --where cpu
+expect_exit 2 "compile mode on a CPU kernel" \
+    "$BIN" --compile-mode cubin --kernel md5/scalar-s1
+# A kernel the backend filter excludes, and a CUDA compile mode for a kernel
+# that is not CUDA: exit 2 whether or not the device exists, since either the
+# contradiction or the missing device is a reason the run cannot happen.
+expect_exit 2 "kernel excluded by --backend" \
+    "$BIN" --backend cuda --kernel md5/ocl-s1
+expect_exit 2 "compile mode on an OpenCL kernel" \
+    "$BIN" --compile-mode cubin --kernel md5/ocl-s1
 
 # --device used to bound at VB_MAX_THREADS (1024) while the measurement path
 # reserved VB_OCL_MAX_DEVICES (32), and copied between them unchecked. Indices
