@@ -79,7 +79,8 @@ static void usage(FILE *f, const char *argv0)
 "  --version            print version\n"
 "  -h, --help           this text\n"
 "\n"
-"Exit status: 0 success, 1 verification failure, 2 usage error,\n"
+"Exit status: 0 success, 1 verification failure, 2 usage error or the\n"
+"             kernel could not run (no memory, threads, or device),\n"
 "             3 result too noisy to trust.\n",
             argv0, vb_default_threads(),
             VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
@@ -390,6 +391,7 @@ int main(int argc, char **argv)
 {
     vb_config cfg;
     int as_json = 0, verbose = 0;
+    int alg_given = 0;            /* --algorithm named explicitly */
     vb_action action = ACT_RUN;
     /* Both are resolved after the loop, for the same reason --list is: they
        depend on --algorithm, which may appear either side of them. */
@@ -432,6 +434,7 @@ int main(int argc, char **argv)
                                 "(md5, sha1, sha512)\n", argv[i]);
                 return VB_EXIT_USAGE;
             }
+            alg_given = 1;
         } else if (!strcmp(a, "--transfer")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             const char *m = argv[++i];
@@ -546,6 +549,15 @@ int main(int argc, char **argv)
         if (!k) {
             fprintf(stderr, "valubench: no kernel named '%s' (try --list)\n",
                     cfg.force_kernel);
+            return VB_EXIT_USAGE;
+        }
+        /* An explicit --algorithm that disagrees with the kernel is a
+           contradiction, like --kernel against --where. Letting the kernel
+           win silently measured MD5 for someone who asked for SHA-1. */
+        if (alg_given && k->alg != cfg.alg->id) {
+            fprintf(stderr, "valubench: --kernel '%s' is a %s kernel, but "
+                            "--algorithm %s was given\n", k->name,
+                    vb_algorithm_by_id(k->alg)->name, cfg.alg->name);
             return VB_EXIT_USAGE;
         }
         cfg.alg = vb_algorithm_by_id(k->alg);
@@ -690,29 +702,48 @@ int main(int argc, char **argv)
             return VB_EXIT_USAGE;
         }
     } else {
-        k = vb_autotune(&cfg, verbose && !as_json);
+        vb_autotune_outcome why;
+        k = vb_autotune(&cfg, verbose && !as_json, &why);
         if (!k) {
-            if (cfg.where != VB_WHERE_ANY) {
-                fprintf(stderr,
-                        "valubench: no %s kernel is available for %s on this "
-                        "machine\n",
-                        cfg.where == VB_WHERE_CPU ? "cpu" : "device",
-                        cfg.alg->name);
+            const char *scope = cfg.where == VB_WHERE_CPU    ? "cpu "
+                              : cfg.where == VB_WHERE_DEVICE ? "device "
+                              : "";
+            /*
+             * Order matters. A single wrong answer outranks everything else:
+             * it is a fact about the hardware and must reach the caller as a
+             * verification failure whatever --where says. This used to be
+             * decided by --where alone, so a verification failure under
+             * --where cpu came back as exit 2, "no kernel available", and a
+             * sweep recorded it as a usage error and carried on.
+             */
+            if (why.verify_failed) {
+                fprintf(stderr, "valubench: no %skernel passed verification "
+                                "on this machine (%u of %u failed)\n",
+                        scope, why.verify_failed, why.eligible);
+                return VB_EXIT_VERIFY_FAILED;
+            }
+            if (why.could_not_run) {
+                fprintf(stderr, "valubench: no %skernel could run: %s\n",
+                        scope, why.run_error);
                 return VB_EXIT_USAGE;
             }
-            fprintf(stderr,
-                    "valubench: no kernel passed verification on this machine\n");
-            return VB_EXIT_VERIFY_FAILED;
+            fprintf(stderr, "valubench: no %skernel is available for %s on "
+                            "this machine\n", scope, cfg.alg->name);
+            return VB_EXIT_USAGE;
         }
     }
 
     vb_result r;
     if (vb_measure(k, &cfg, &r) != 0) {
-        /* A device that could not be set up at all is a configuration problem,
-           not the hardware computing wrong answers. Say which. */
-        if (r.device_error[0] && !r.n_samples) {
-            fprintf(stderr, "valubench: device kernel '%s' could not run:\n"
-                            "  %s\n", k->name, r.device_error);
+        /* A kernel that never produced an answer -- no memory for the corpus,
+           threads that would not start, a device that could not be set up --
+           says nothing about the hardware's arithmetic. Reporting it as a
+           verification failure told people to check overclocking and cooling
+           for an out-of-memory corpus. Say which, and keep the exit code the
+           one a device setup failure has always used. */
+        if (r.run_error[0]) {
+            fprintf(stderr, "valubench: kernel '%s' could not run:\n  %s\n",
+                    k->name, r.run_error);
             return VB_EXIT_USAGE;
         }
         fprintf(stderr,

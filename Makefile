@@ -275,7 +275,16 @@ KHDRS := $(wildcard src/kernels/cpu/*.h)
 # in zero seconds and the next step died on a binary that was never linked.
 .DEFAULT_GOAL := all
 
-.PHONY: all test check check-kernels clean config
+.PHONY: all test check check-kernels clean config need-python3
+
+# Three checks read the binary's JSON with python3. Without it they used to
+# fail as if the binary were at fault -- check-pinning reported "no pinned_cpus
+# in the result" -- which sends someone debugging the wrong thing. The benchmark
+# itself never needs python3; only these checks and tools/ do.
+need-python3:
+	@command -v python3 >/dev/null 2>&1 || { \
+	   echo "  FAIL  make check needs python3 (stdlib only) to read the JSON"; \
+	   exit 1; }
 
 all: $(BUILD)/valubench $(BUILD)/test_hashes $(BUILD)/test_kernels
 
@@ -452,7 +461,7 @@ check-config: $(BUILD)/test_config
 # No baseline needed, which is the point: this is an invariant, not a
 # comparison against a recorded figure. A single-CPU machine cannot test it and
 # says so rather than passing quietly.
-check-pinning: $(BUILD)/valubench
+check-pinning: need-python3 $(BUILD)/valubench
 	@n=$$(nproc 2>/dev/null || echo 1); \
 	 if [ "$$n" -lt 2 ]; then \
 	   echo "  skip  pinning       (needs >1 cpu; this machine has $$n)"; \
@@ -475,7 +484,7 @@ print(e["threads_used"], e["pinned_cpus"])' 2>/dev/null); \
 	   fi; \
 	 fi
 
-check-contract: $(BUILD)/valubench
+check-contract: need-python3 $(BUILD)/valubench
 	@sh tests/check_output_contract.sh $(BUILD)/valubench .
 
 $(BUILD)/fail_pthread_create.so: tests/fail_pthread_create.c
@@ -488,7 +497,7 @@ $(BUILD)/test_thread_failure: tests/test_thread_failure.c $(BUILD)/workload.o \
 # A thread that fails to start must not corrupt the reference. Injected at each
 # index in turn, because the defect this covers only appears when the failure is
 # not the last one -- a contiguous prefix of successes was always handled.
-check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
+check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
                   $(BUILD)/valubench
 	@for n in 1 2 3 4; do \
 	   LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
@@ -507,6 +516,10 @@ check-threadfail: $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
 	         && rc=0 || rc=$$?; \
 	   if [ "$$rc" = 137 ] || [ "$$rc" = 124 ]; then \
 	     echo "  FAIL  threadfail  create $$n hung; a stalled pool is not a pass"; \
+	     exit 1; \
+	   fi; \
+	   if [ "$$rc" = 1 ]; then \
+	     echo "  FAIL  threadfail  create $$n failing was reported as a verification failure"; \
 	     exit 1; \
 	   fi; \
 	   if [ "$$rc" != 0 ]; then continue; fi; \

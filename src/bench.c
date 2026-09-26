@@ -1046,6 +1046,12 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     if (k->device) {
         rc = measure_device(k, cfg, corpus, out);
         vb_power_close(&out->power);
+        /* No sample and a device error means setup failed before any digest
+           was computed -- the same test main() has always used to tell a
+           device that could not start from one that computed wrong answers. */
+        if (rc != 0 && out->n_samples == 0 && out->device_error[0])
+            snprintf(out->run_error, sizeof out->run_error, "%s",
+                     out->device_error);
         return rc;
     }
 
@@ -1061,6 +1067,8 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     vb_pool pool;
     if (pool_create(&pool, k, cfg, corpus, threads) != 0) {
         out->verified = 0;
+        snprintf(out->run_error, sizeof out->run_error,
+                 "could not start a pool of %u worker threads", threads);
         goto done;
     }
     pool_ready = 1;
@@ -1160,6 +1168,18 @@ done:
     return rc;
 }
 
+/* The reason a corpus could not be built, with the size that was asked for,
+   so the message says which knob to turn. */
+static void corpus_error(const vb_config *cfg, char *buf, size_t n)
+{
+    uint64_t bytes = vb_batch_messages(cfg)
+                   * vb_alg_blocks_for(cfg->alg, cfg->message_bytes)
+                   * VB_WORDS_PER_BLOCK * cfg->alg->word_bytes;
+    snprintf(buf, n, "could not allocate a %llu MiB corpus; try a smaller "
+                     "--working-set-kb or --message-bytes",
+             (unsigned long long) ((bytes + (1u << 20) - 1) >> 20));
+}
+
 int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out)
 {
     vb_corpus corpus;
@@ -1169,6 +1189,7 @@ int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out)
                         vb_batch_messages(cfg), cfg->message_bytes) != 0) {
         memset(out, 0, sizeof *out);
         out->kernel = k;
+        corpus_error(cfg, out->run_error, sizeof out->run_error);
         return 1;
     }
 
@@ -1177,8 +1198,14 @@ int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out)
     return rc;
 }
 
-const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
+const vb_kernel *vb_autotune(const vb_config *cfg, int verbose,
+                             vb_autotune_outcome *why)
 {
+    vb_autotune_outcome local;
+    if (!why)
+        why = &local;
+    memset(why, 0, sizeof *why);
+
     size_t count;
     const vb_kernel *ks = vb_kernels(&count);
     const vb_kernel *best = NULL;
@@ -1225,6 +1252,7 @@ const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
                 printf("  %-14s unavailable here\n", k->name);
             continue;
         }
+        why->eligible++;
 
         if (k->lanes != corpus_lanes) {
             vb_corpus_free(&corpus);
@@ -1233,6 +1261,8 @@ const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
                 if (verbose)
                     printf("  %-14s corpus allocation failed -- skipped\n",
                            k->name);
+                if (why->could_not_run++ == 0)
+                    corpus_error(cfg, why->run_error, sizeof why->run_error);
                 corpus_lanes = 0;
                 continue;
             }
@@ -1240,8 +1270,21 @@ const vb_kernel *vb_autotune(const vb_config *cfg, int verbose)
         }
 
         if (measure_with_corpus(k, &probe, &corpus, &r) != 0) {
-            if (verbose)
-                printf("  %-14s FAILED VERIFICATION -- excluded\n", k->name);
+            /* Two different exclusions, and --verbose used to call both of
+               them a verification failure. */
+            if (r.run_error[0]) {
+                if (verbose)
+                    printf("  %-14s could not run -- excluded (%s)\n",
+                           k->name, r.run_error);
+                if (why->could_not_run++ == 0)
+                    snprintf(why->run_error, sizeof why->run_error, "%s",
+                             r.run_error);
+            } else {
+                if (verbose)
+                    printf("  %-14s FAILED VERIFICATION -- excluded\n",
+                           k->name);
+                why->verify_failed++;
+            }
             continue;
         }
 

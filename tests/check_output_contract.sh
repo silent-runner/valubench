@@ -126,8 +126,9 @@ for rung in doc["checksums"]:
 
 # ---- the documented exit codes must be the ones actually used ---------------
 #
-# usage=2 and noisy=3 are reachable from the command line. verify_failed=1 is
-# not: producing it means breaking a kernel, which the kernel tests cover.
+# All four are reachable from the command line. verify_failed=1 needs no broken
+# kernel: an --expect that no kernel can match produces it, and is the cheapest
+# way to prove the verification path still reports as one.
 expect_exit() {
     want=$1; desc=$2; shift 2
     "$@" >/dev/null 2>&1 && got=0 || got=$?
@@ -165,6 +166,22 @@ expect_exit 2 "expect, not hex"       "$BIN" --expect "$(printf 'z%.0s' $(seq 32
 expect_exit 2 "ladder descending"     "$BIN" --reference-ladder 8,4,1
 expect_exit 2 "ladder empty"          "$BIN" --reference-ladder ""
 expect_exit 2 "ladder not a list"     "$BIN" --reference-ladder "1;2"
+
+# A --kernel that contradicts an explicit --algorithm used to win silently and
+# measure the kernel's own algorithm under the other's name.
+expect_exit 2 "kernel contradicts algorithm" \
+    "$BIN" --algorithm sha1 --kernel md5/scalar-s1
+
+# A verification failure is exit 1 however the candidates were restricted.
+# Under --where cpu it used to come back as 2, "no cpu kernel is available",
+# and a sweep recorded a wrong answer from the hardware as a usage error.
+NOMATCH=00000000000000000000000000000000
+QUICK="--threads 2 --samples 2 --time-ms 20 --warmup-ms 0"
+expect_exit 1 "verification failure"             "$BIN" --expect $NOMATCH $QUICK
+expect_exit 1 "verification failure, --where cpu" \
+    "$BIN" --where cpu --expect $NOMATCH $QUICK
+expect_exit 1 "verification failure, forced kernel" \
+    "$BIN" --kernel md5/scalar-s1 --expect $NOMATCH $QUICK
 # A valid run exits 0, or 3 if the machine was too noisy to trust the number.
 # Both mean it ran; only 1 and 2 mean it did not. Asserting 0 here would make
 # this test flaky on precisely the shared, contended runners CI uses -- which is
