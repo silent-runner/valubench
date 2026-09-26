@@ -851,11 +851,12 @@ int main(int argc, char **argv)
     if (k) {
         if (!k->available()) {
             if (k->device) {
+                /* The backend's own reason, which may be a missing compiler
+                   rather than a missing device. */
                 const char *why = vb_backend_unavailable((vb_backend_id)
                                                          k->backend);
-                fprintf(stderr, "valubench: kernel '%s' needs a %s device, "
-                                "and there is none%s%s\n", k->name, k->isa,
-                        why ? ": " : "", why ? why : "");
+                fprintf(stderr, "valubench: kernel '%s' cannot run here: %s\n",
+                        k->name, why ? why : "no device reachable through this API");
             } else {
                 fprintf(stderr,
                         "valubench: kernel '%s' needs %s, which this CPU "
