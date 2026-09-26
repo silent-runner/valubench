@@ -517,16 +517,47 @@ int vb_dev_ctx_collect(vb_dev_ctx *c, uint64_t checksum[VB_MAX_DIGEST_WORDS])
 
 /* ---- pipelined streaming ------------------------------------------------ */
 
+/*
+ * The chunk buffers' share of device memory, as a divisor, when the chunk
+ * count is left to us: the pair may take a quarter of it, on top of the
+ * resident copy of the slice that tuning and the first check use.
+ */
+#define VB_PIPE_MEM_SHARE 4
+
+/*
+ * The chunk count nobody asked for. One: the pipeline runs continuously
+ * across passes and samples into alternating buffers, so each pass uploads
+ * while the one before it hashes, and a further chunk is only another,
+ * smaller launch -- measured a few percent slower where compute binds and
+ * no faster where the link does, once samples stopped refilling the
+ * pipeline. But one chunk means two buffers each a whole pass long, so a
+ * working set too large for that is split until the pair fits.
+ */
+static unsigned auto_chunks(const vb_dev_ctx *c)
+{
+    uint64_t budget = c->dev.global_mem / VB_PIPE_MEM_SHARE;
+    unsigned chunks = 1;
+
+    while (budget && chunks < c->n_groups && chunks < 256) {
+        uint64_t first, largest;
+        vb_dev_slice(c->n_groups, (int) chunks, 0, &first, &largest);
+        if (2 * largest * c->group_bytes <= budget)
+            break;
+        chunks++;
+    }
+    return chunks;
+}
+
 int vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned)
 {
     if (!c->be->pipe_open) {
         set_err(c, "the %s backend cannot pipeline transfers", c->be->name);
         return -1;
     }
+    if (chunks == 0)
+        chunks = auto_chunks(c);
     /* A chunk is whole groups, so a slice of one group is one chunk; the
        pipeline still overlaps it with the next pass's upload. */
-    if (chunks < 1)
-        chunks = 1;
     if (chunks > c->n_groups)
         chunks = (unsigned) c->n_groups;
 

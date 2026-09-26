@@ -54,7 +54,9 @@ outside this repository while a durable format for them is decided.
 - **`--transfer overlap`: the sustained rate with uploads overlapping
   hashing.** Streaming uploaded each pass and then hashed it, so the link and
   the device took turns. Overlap uploads each pass in chunks on a second queue
-  or stream (`--pipeline-chunks`, default 4) into alternating device buffers
+  or stream into alternating device buffers (`--pipeline-chunks`; one per
+  pass by default, more only when two whole-pass buffers would take over a
+  quarter of device memory)
   while earlier chunks hash, with the partials read back asynchronously into
   pinned memory; every pass is still verified. The pipeline runs as one stream
   for the whole measurement and each timed sample is cut from it at pass

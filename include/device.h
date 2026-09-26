@@ -265,7 +265,9 @@ void vb_dev_ctx_set_stream(vb_dev_ctx *c, int on, int pinned);
 /*
  * Pipelined streaming on after init: each pass uploads the slice in `chunks`
  * pieces while earlier pieces hash, from pinned memory if `pinned` (and the
- * platform can). Implies streaming, so repeats are 1. Returns 0, or -1 with
+ * platform can). `chunks` 0 chooses: one per pass, unless its two whole-pass
+ * buffers would take more than a quarter of the device's memory, then the
+ * fewest that fit. Implies streaming, so repeats are 1. Returns 0, or -1 with
  * c->error set if the pipeline cannot be built.
  */
 int  vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned);

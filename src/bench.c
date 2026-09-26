@@ -105,7 +105,7 @@ void vb_config_defaults(vb_config *cfg)
     cfg->device_count   = 0;   /* every device */
     cfg->transfer       = VB_TRANSFER_RESIDENT;
     cfg->host_memory    = VB_HOST_PINNED;
-    cfg->pipeline_chunks = 4;
+    cfg->pipeline_chunks = 0;  /* chosen per device */
     cfg->where          = VB_WHERE_ANY;
     cfg->cov_threshold  = 3.5;  /* same spirit as the PTS default, RESEARCH 1.2 */
     cfg->pin_cpu        = 1;
