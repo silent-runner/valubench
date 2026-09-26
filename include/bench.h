@@ -58,6 +58,20 @@ typedef struct {
     uint64_t checksum[VB_MAX_DIGEST_WORDS];
     const vb_algorithm *alg;
 
+    /*
+     * Set when the kernel never got as far as producing an answer: the corpus
+     * could not be allocated, the worker threads could not all start, or a
+     * device could not be set up. Empty when the kernel ran.
+     *
+     * This is kept apart from `verified` because the two call for opposite
+     * reactions. A verification failure means the hardware computed a wrong
+     * digest, which should stop a sweep and send someone to check the
+     * machine. A run that never started says nothing about the hardware, and
+     * reporting it as a wrong answer sent people looking at clocks and cooling
+     * for what was an out-of-memory corpus.
+     */
+    char run_error[512];   /* as large as device_error, which it may carry */
+
     /* Device kernels only; empty otherwise. */
     char device_name[128];
     char device_vendor[128];
@@ -211,13 +225,33 @@ int vb_validate_kernel(const vb_kernel *k, const vb_config *cfg,
                        uint64_t checksum_out[VB_MAX_DIGEST_WORDS],
                        uint64_t expected[VB_MAX_DIGEST_WORDS]);
 
-/* Measure one kernel. Returns 0 on success, non-zero if verification failed. */
+/*
+ * Measure one kernel. Returns 0 on success, non-zero otherwise. On failure,
+ * out->run_error is non-empty if the kernel could not be run at all, and empty
+ * if it ran and failed verification.
+ */
 int vb_measure(const vb_kernel *k, const vb_config *cfg, vb_result *out);
+
+/*
+ * Why autotune chose nothing. NULL from vb_autotune has three different
+ * causes that deserve three different messages and exit codes: nothing
+ * eligible was available, something ran and computed a wrong answer, or
+ * everything eligible failed to start. Collapsing them is how a verification
+ * failure under --where cpu came to be reported as "no kernel available".
+ */
+typedef struct {
+    unsigned eligible;       /* available after the --where filter */
+    unsigned verify_failed;  /* ran, and failed verification */
+    unsigned could_not_run;  /* never produced an answer */
+    char     run_error[512]; /* the first could-not-run reason */
+} vb_autotune_outcome;
 
 /*
  * Pick the fastest available kernel by short measurement. Every candidate is
  * validated first; candidates that fail validation are excluded and reported.
+ * `why` may be NULL; when it is not, it says why NULL was returned.
  */
-const vb_kernel *vb_autotune(const vb_config *cfg, int verbose);
+const vb_kernel *vb_autotune(const vb_config *cfg, int verbose,
+                             vb_autotune_outcome *why);
 
 #endif /* VALUBENCH_BENCH_H */
