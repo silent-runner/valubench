@@ -83,6 +83,13 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`sweep.py` fitted one crossover through incompatible points.** The PCIe
+  balance point was fitted per algorithm and kernel only, so a sweep over two
+  message lengths, two working sets or pinned and pageable uploads drew one
+  line through all of them, and the transfer term -- which should be flat --
+  moved by the difference between them. It is now fitted per group of points
+  that differ only in iteration count; a tuned launch geometry does not split
+  a group, a pinned one does.
 - **Device repeats were calibrated at one iteration.** The number of corpus
   sweeps per launch was chosen at `--iterations 1` and kept, so a
   1,024-iteration run launched for tens of seconds at a time -- long enough
