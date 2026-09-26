@@ -766,16 +766,49 @@ def balance_point(rows):
     }
 
 
+# Everything that must be the same across the points of one N* fit: all of a
+# point's fixed parameters, leaving only the iteration ladder to vary.
+# A tuned launch is a result, not a parameter -- the tuner can choose
+# differently at each rung -- so only a pinned one splits the groups.
+BALANCE_GROUP = ("algorithm", "kernel", "message_bytes", "working_set_bytes",
+                 "threads", "host_memory", "compile_mode", "device_compiler",
+                 "primitives", "pinned_geometry")
+
+
+def _group_field(r, f):
+    if f == "pinned_geometry":
+        return ("%sx%s" % (r.get("global_work", ""), r.get("local_work", ""))
+                if r.get("geometry_source") == "pinned" else "")
+    return r.get(f, "")
+
+
 def report_balance(rows, out):
-    """Print the balance point per (algorithm, kernel) group."""
+    """
+    Print the balance point per group of otherwise-identical points.
+
+    It grouped by (algorithm, kernel) only, so a sweep over two message
+    lengths, two working sets or pinned and pageable uploads fitted one line
+    through incompatible points -- the transfer term, which should be flat,
+    moved by the difference between them and was reported as noise.
+    """
     groups = {}
     for r in rows:
         if r.get("transfer_mode") != "stream":
             continue
-        groups.setdefault((r["algorithm"], r["kernel"]), []).append(r)
+        key = tuple(_group_field(r, f) for f in BALANCE_GROUP)
+        groups.setdefault(key, []).append(r)
+
+    # Label a group by the kernel, plus whatever tells it apart from another
+    # group of the same kernel.
+    varies = [i for i, f in enumerate(BALANCE_GROUP) if i >= 2 and
+              len({k[i] for k in groups}) > 1]
 
     printed = False
-    for (alg, kern), rs in groups.items():
+    for key, rs in groups.items():
+        kern = key[1]
+        if varies:
+            kern += " " + " ".join("%s=%s" % (BALANCE_GROUP[i], key[i])
+                                   for i in varies)
         fit = balance_point(rs)
         if not fit:
             continue
@@ -797,7 +830,9 @@ def report_balance(rows, out):
             warn += "   [transfer varied %.0f%% across the sweep]" % (
                 fit["transfer_spread"] * 100)
 
-        print("  %-16s N* = %.2f iterations%s" % (kern, n, warn), file=out)
+        print("  %s\n      N* = %.2f iterations%s" % (kern, n, warn) if varies
+              else "  %-16s N* = %.2f iterations%s" % (kern, n, warn),
+              file=out)
         print("      compute-bound from %d iterations up" % max(1, math.ceil(n)),
               file=out)
         print("      %.3f ms per iteration, %.3f ms fixed launch cost, "
