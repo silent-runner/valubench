@@ -14,7 +14,6 @@
 #include "valubench.h"
 #include "bench.h"
 #include "cpu_features.h"
-#include "opencl_backend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,22 +37,32 @@ static int run_kernel(const vb_kernel *k, const vb_corpus *c, uint64_t groups,
         return 0;
     }
 
-    vb_ocl_device devs[VB_OCL_MAX_DEVICES];
-    if (vb_ocl_devices(devs, VB_OCL_MAX_DEVICES) <= 0) {
-        snprintf(err, errn, "no OpenCL device");
+    /* The first device this kernel's backend reaches. */
+    vb_device devs[VB_DEV_MAX];
+    int n = vb_devices(devs, VB_DEV_MAX), d = 0;
+    while (d < n && !devs[d].present[k->backend])
+        d++;
+    const vb_dev_backend *be = vb_backend((vb_backend_id) k->backend);
+    if (d == n || !be) {
+        snprintf(err, errn, "no %s device", vb_backend_name((vb_backend_id)
+                                                             k->backend));
         return -1;
     }
 
-    vb_ocl_ctx ctx;
-    if (vb_ocl_ctx_init(&ctx, &devs[0], c, k->streams, 0,
-                        c->n_messages / (k->lanes * k->streams)) != 0) {
+    vb_dev_options opt;
+    vb_dev_options_default(&opt);
+    opt.iterations = iters;
+
+    vb_dev_ctx ctx;
+    if (vb_dev_ctx_init(&ctx, be, &devs[d].via[k->backend], c, k->streams, 0,
+                        c->n_messages / (k->lanes * k->streams), &opt) != 0) {
         snprintf(err, errn, "%s", ctx.error);
         return -1;
     }
-    int rc = vb_ocl_ctx_run(&ctx, iters, out);
+    int rc = vb_dev_ctx_run(&ctx, iters, out);
     if (rc != 0)
         snprintf(err, errn, "%s", ctx.error);
-    vb_ocl_ctx_free(&ctx);
+    vb_dev_ctx_free(&ctx);
     return rc;
 }
 

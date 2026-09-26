@@ -28,8 +28,33 @@ outside this repository while a durable format for them is decided.
   fewer, and MD5's hash loop is unchanged; its work-group reduction takes
   eight more instructions per work-item, once per launch.
 
+- **Devices are listed once, whichever APIs reach them.** `--list-devices`
+  shows each physical device with its PCI address and a line per API, and the
+  JSON gains `backends` and `devices` beside the unchanged `opencl` object.
+  `--device` indices follow the same list, which keeps OpenCL's order.
+- **The device layer is shared by every API.** Program composition, launch
+  geometry, repeat calibration, the partial fold and the multi-device split
+  moved out of the OpenCL backend into `src/device/`, so a second API is a
+  second backend and nothing else.
+
 ### Added
 
+- **`--device-geometry GLOBAL,LOCAL`** pins the device launch instead of
+  tuning it, and refuses one the kernel cannot use. The tuner picks by short
+  probes and can land differently between identical runs; comparing two
+  compiled kernels needs the same launch on both sides.
+- **`--primitives neutral`** compiles device kernels with plain C for every
+  primitive, to size what steering is worth.
+- **`--dump-device-code DIR`** writes each device program as compiled: the
+  composed source, what the compiler produced where the API exposes it, and
+  the build log.
+- **The result says what ran a device kernel**: `backend`, `compiler`,
+  `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`,
+  `steers` and `geometry_source`, in the JSON and as columns of the sweep CSV,
+  which also gains the launch geometry -- `global_work`, `local_work`,
+  `sweeps_per_launch` -- that previously stopped at the JSON. `sweep.py` has
+  `--primitives` and `--device-geometry` axes, and runs points that differ
+  only in device API side by side, rotating the order.
 - **`tools/idiom_probe.py`**, which compiles each hash primitive in every
   spelling the kernels offer, for NVRTC at any NVIDIA architecture, NVIDIA's
   OpenCL on a present card and clang's AMDGPU backend, and counts the machine
@@ -38,6 +63,14 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **Device repeats were calibrated at one iteration.** The number of corpus
+  sweeps per launch was chosen at `--iterations 1` and kept, so a
+  1,024-iteration run launched for tens of seconds at a time -- long enough
+  for a display GPU's watchdog to kill it. It is now calibrated at the
+  iteration count being measured.
+- **GPU clock telemetry read every NVML device** and kept the highest, so on a
+  machine with two cards an idle one could report the clock. It now samples
+  only the devices the run used, matched by PCI address.
 - **A heap overflow when `--kernel` names another algorithm's kernel.**
   Forcing a kernel fixes the algorithm, but the kernel was looked up after
   `--message-bytes` and `--expect` had been validated against the default MD5.

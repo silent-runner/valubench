@@ -269,7 +269,7 @@ HDRS := include/hashes.h include/sha512_const.h \
         include/algorithm.h include/valubench.h \
         include/bench.h include/sysinfo.h include/report.h \
         include/cpu_features.h include/vb_cl.h include/opencl.h \
-        include/opencl_backend.h include/power.h include/device_steer.h
+        include/power.h include/device_steer.h include/device.h
 # Every kernel translation unit depends on the whole template set and on the
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)

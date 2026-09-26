@@ -69,7 +69,6 @@
 
 #include "bench.h"
 #include "valubench.h"
-#include "opencl_backend.h"
 #include "power.h"
 
 #include <pthread.h>
@@ -718,30 +717,49 @@ static uint64_t calibrate_reps(vb_pool *p, unsigned target_ms)
 static int measure_device(const vb_kernel *k, const vb_config *cfg,
                           const vb_corpus *corpus, vb_result *out)
 {
-    vb_ocl_device devs[VB_OCL_MAX_DEVICES];
-    int n_avail = vb_ocl_devices(devs, VB_OCL_MAX_DEVICES);
-    int idx[VB_OCL_MAX_DEVICES];
+    vb_device devs[VB_DEV_MAX];
+    int n_avail = vb_devices(devs, VB_DEV_MAX);
+    vb_backend_id b = (vb_backend_id) k->backend;
+    const vb_dev_backend *be = vb_backend(b);
+    int idx[VB_DEV_MAX];
     int n_use = 0;
 
-    if (n_avail <= 0) {
+    if (!be || n_avail <= 0) {
         out->verified = 0;
         return 1;
     }
 
-    /* Which devices: all of them, or the ones named by --device. */
+    /* Which devices: every one this backend reaches, or those named by
+       --device. The indices are into the list every backend shares, so a card
+       another API can see but this one cannot is refused by name. */
     if (cfg->device_count <= 0) {
         for (int i = 0; i < n_avail; i++)
-            idx[n_use++] = i;
+            if (devs[i].present[b])
+                idx[n_use++] = i;
+        if (n_use == 0) {
+            snprintf(out->device_error, sizeof out->device_error,
+                     "no device is reachable through %s",
+                     vb_backend_name(b));
+            out->verified = 0;
+            return 1;
+        }
     } else {
         for (int i = 0; i < cfg->device_count; i++) {
-            if (cfg->device_index[i] < 0 || cfg->device_index[i] >= n_avail) {
+            int d = cfg->device_index[i];
+            if (d < 0 || d >= n_avail) {
                 snprintf(out->device_error, sizeof out->device_error,
-                         "no OpenCL device %d (there are %d)",
-                         cfg->device_index[i], n_avail);
+                         "no device %d (there are %d)", d, n_avail);
                 out->verified = 0;
                 return 1;
             }
-            idx[n_use++] = cfg->device_index[i];
+            if (!devs[d].present[b]) {
+                snprintf(out->device_error, sizeof out->device_error,
+                         "device %d (%s) is not reachable through %s", d,
+                         vb_device_info(&devs[d])->name, vb_backend_name(b));
+                out->verified = 0;
+                return 1;
+            }
+            idx[n_use++] = d;
         }
     }
 
@@ -751,8 +769,17 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     if ((uint64_t) n_use > total_groups)
         n_use = (int) total_groups;     /* never leave a device with no work */
 
-    vb_ocl_ctx ctx[VB_OCL_MAX_DEVICES];
-    uint64_t expect[VB_OCL_MAX_DEVICES][VB_MAX_DIGEST_WORDS];
+    vb_dev_options opt;
+    vb_dev_options_default(&opt);
+    opt.neutral = cfg->primitives_neutral;
+    opt.dump_dir = cfg->dump_dir;
+    opt.pin_global = cfg->pin_global;
+    opt.pin_local = cfg->pin_local;
+    opt.iterations = cfg->iterations;
+    opt.compile_mode = cfg->compile_mode;
+
+    vb_dev_ctx ctx[VB_DEV_MAX];
+    uint64_t expect[VB_DEV_MAX][VB_MAX_DIGEST_WORDS];
     int        n_init = 0;
 
     /*
@@ -765,21 +792,18 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
      * set the aggregate is therefore paced by the slowest device -- a known
      * limitation, stated here rather than silently averaged away.
      */
-    uint64_t base = total_groups / (uint64_t) n_use;
-    uint64_t extra = total_groups % (uint64_t) n_use;
-    uint64_t off = 0;
-
     for (int i = 0; i < n_use; i++) {
-        uint64_t mine = base + ((uint64_t) i < extra ? 1 : 0);
+        uint64_t off, mine;
+        vb_dev_slice(total_groups, n_use, i, &off, &mine);
 
-        if (vb_ocl_ctx_init(&ctx[i], &devs[idx[i]], corpus, k->streams,
-                            off, mine) != 0) {
+        if (vb_dev_ctx_init(&ctx[i], be, &devs[idx[i]].via[b], corpus,
+                            k->streams, off, mine, &opt) != 0) {
             snprintf(out->device_error, sizeof out->device_error, "%s",
                      ctx[i].error);
             goto fail_init;
         }
         n_init++;
-        vb_ocl_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM,
+        vb_dev_ctx_set_stream(&ctx[i], cfg->transfer == VB_TRANSFER_STREAM,
                               cfg->host_memory == VB_HOST_PINNED);
 
         /* Parallel, like the other two paths. This is the one that hurt: a
@@ -794,7 +818,6 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
                                      mine * group, cfg->message_bytes,
                                      cfg->iterations, vb_default_threads(),
                                      expect[i]);
-        off += mine;
     }
 
     /* Provenance: name the first device, and say how many are in play. */
@@ -802,9 +825,32 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     snprintf(out->device_vendor, sizeof out->device_vendor, "%s",
              ctx[0].dev.vendor);
     snprintf(out->device_driver, sizeof out->device_driver, "%s",
-             ctx[0].dev.driver_version);
+             ctx[0].dev.driver);
+    snprintf(out->device_backend, sizeof out->device_backend, "%s", be->name);
+    snprintf(out->device_compiler, sizeof out->device_compiler, "%s",
+             ctx[0].compiler);
+    snprintf(out->device_compiler_version,
+             sizeof out->device_compiler_version, "%s",
+             ctx[0].compiler_version);
+    snprintf(out->device_compile_mode, sizeof out->device_compile_mode, "%s",
+             ctx[0].compile_mode);
+    snprintf(out->device_platform, sizeof out->device_platform, "%s",
+             ctx[0].dev.platform);
+    snprintf(out->device_pci, sizeof out->device_pci, "%s", ctx[0].dev.pci);
+    snprintf(out->device_steers, sizeof out->device_steers, "%s",
+             ctx[0].steers);
+    out->device_primitives_neutral = cfg->primitives_neutral;
+    out->device_geometry_pinned = ctx[0].geometry_pinned;
     out->device_count = n_use;
     out->threads = 1;
+
+    /* Clock telemetry for these devices only, not every card NVML sees. */
+    {
+        const char *pci[VB_DEV_MAX];
+        for (int i = 0; i < n_use; i++)
+            pci[i] = ctx[i].dev.pci;
+        vb_gpu_clocks_select(pci, n_use);
+    }
 
     /* Pinned only if every device got it: a fallback on one of them is the
        figure that sets the pace, and would otherwise be misreported. */
@@ -818,11 +864,11 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     #define VB_DEV_PASS(ok_label)                                          \
         do {                                                               \
             for (int i = 0; i < n_use; i++)                                \
-                if (vb_ocl_ctx_enqueue(&ctx[i], cfg->iterations) != 0)     \
+                if (vb_dev_ctx_enqueue(&ctx[i], cfg->iterations) != 0)     \
                     goto ok_label;                                         \
             for (int i = 0; i < n_use; i++) {                              \
                 uint64_t part[VB_MAX_DIGEST_WORDS];                                          \
-                if (vb_ocl_ctx_collect(&ctx[i], part) != 0)                \
+                if (vb_dev_ctx_collect(&ctx[i], part) != 0)                \
                     goto ok_label;                                         \
                 if (!cfg->have_expected                                    \
                     && memcmp(part, expect[i], sizeof part) != 0)           \
@@ -999,7 +1045,7 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     }
 
     for (int i = 0; i < n_init; i++)
-        vb_ocl_ctx_free(&ctx[i]);
+        vb_dev_ctx_free(&ctx[i]);
 
     out->n_samples = n_samples;
     out->verified = 1;
@@ -1012,7 +1058,7 @@ fail_run:
                  ctx[0].error);
 fail_init:
     for (int i = 0; i < n_init; i++)
-        vb_ocl_ctx_free(&ctx[i]);
+        vb_dev_ctx_free(&ctx[i]);
     out->verified = 0;
     return 1;
     #undef VB_DEV_PASS

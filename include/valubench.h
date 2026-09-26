@@ -215,6 +215,10 @@ typedef struct {
      * blameless. Callers that refuse such a kernel should say which it is.
      */
     int          lanes_runtime;
+
+    /* Which API runs a device kernel (a vb_backend_id, device.h); -1 on
+       the CPU. */
+    int          backend;
 } vb_kernel;
 
 /* Registry. Kernels whose available() returns 0 are never selected. */

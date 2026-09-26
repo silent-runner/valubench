@@ -183,6 +183,59 @@ static void get_plat_str(const vb_ocl *cl, cl_platform_id p,
     out[got < n ? got : n - 1] = '\0';
 }
 
+/*
+ * The device's PCI address, from the most complete query that answers:
+ * cl_khr_pci_bus_info carries the domain; NVIDIA's and AMD's own queries do
+ * not, so an address from them assumes domain 0 and says so, which is
+ * ambiguous only on a multi-domain server. A CPU or integrated device may
+ * have no address at all, and gets none rather than a guess.
+ */
+static void get_pci(const vb_ocl *cl, cl_device_id d, vb_ocl_device *o)
+{
+    char ext[8192];
+    size_t got = 0;
+    ext[0] = '\0';
+    if (cl->GetDeviceInfo(d, CL_DEVICE_EXTENSIONS, sizeof ext - 1, ext,
+                          &got) == CL_SUCCESS)
+        ext[got < sizeof ext ? got : sizeof ext - 1] = '\0';
+
+    if (strstr(ext, "cl_khr_pci_bus_info")) {
+        vb_cl_pci_bus_info_khr info;
+        if (cl->GetDeviceInfo(d, CL_DEVICE_PCI_BUS_INFO_KHR, sizeof info,
+                              &info, NULL) == CL_SUCCESS) {
+            snprintf(o->pci, sizeof o->pci, "%04x:%02x:%02x.%x",
+                     info.pci_domain & 0xffffu, info.pci_bus & 0xffu,
+                     info.pci_device & 0x1fu, info.pci_function & 0x7u);
+            return;
+        }
+    }
+    if (strstr(ext, "cl_nv_device_attribute_query")) {
+        cl_uint bus = 0, slot = 0;
+        if (cl->GetDeviceInfo(d, CL_DEVICE_PCI_BUS_ID_NV, sizeof bus, &bus,
+                              NULL) == CL_SUCCESS &&
+            cl->GetDeviceInfo(d, CL_DEVICE_PCI_SLOT_ID_NV, sizeof slot, &slot,
+                              NULL) == CL_SUCCESS) {
+            /* The slot id packs device and function as a PCI devfn does. */
+            snprintf(o->pci, sizeof o->pci, "0000:%02x:%02x.%x", bus & 0xffu,
+                     (slot >> 3) & 0x1fu, slot & 0x7u);
+            o->pci_no_domain = 1;
+            return;
+        }
+    }
+    if (strstr(ext, "cl_amd_device_attribute_query")) {
+        vb_cl_topology_amd t;
+        memset(&t, 0, sizeof t);
+        if (cl->GetDeviceInfo(d, CL_DEVICE_TOPOLOGY_AMD, sizeof t, &t,
+                              NULL) == CL_SUCCESS && t.raw.type == 1) {
+            snprintf(o->pci, sizeof o->pci, "0000:%02x:%02x.%x",
+                     (unsigned) (unsigned char) t.pcie.bus,
+                     (unsigned) (unsigned char) t.pcie.device & 0x1fu,
+                     (unsigned) (unsigned char) t.pcie.function & 0x7u);
+            o->pci_no_domain = 1;
+        }
+    }
+}
+
 int vb_ocl_devices(vb_ocl_device *out, int max)
 {
     if (!vb_ocl_load())
@@ -270,6 +323,9 @@ int vb_ocl_devices(vb_ocl_device *out, int max)
                               sizeof o->max_alloc, &o->max_alloc, NULL);
             cl->GetDeviceInfo(devices[d], CL_DEVICE_LOCAL_MEM_SIZE,
                               sizeof o->local_mem, &o->local_mem, NULL);
+            cl->GetDeviceInfo(devices[d], CL_DEVICE_VENDOR_ID,
+                              sizeof o->vendor_id, &o->vendor_id, NULL);
+            get_pci(cl, devices[d], o);
             n++;
         }
     }

@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 enum {
@@ -651,13 +652,55 @@ const char *vb_power_scope_name(vb_power_scope s)
 
 /* ---- GPU clock telemetry ------------------------------------------------ */
 
+#define VB_GPU_SELECT_MAX 32
+static char g_select[VB_GPU_SELECT_MAX][16];
+static int  g_n_select;
+
+void vb_gpu_clocks_select(const char *const *pci, int n)
+{
+    g_n_select = 0;
+    for (int i = 0; i < n && g_n_select < VB_GPU_SELECT_MAX; i++) {
+        if (!pci[i] || !pci[i][0]) {
+            g_n_select = 0;         /* one unidentified device: sample all */
+            return;
+        }
+        snprintf(g_select[g_n_select++], sizeof g_select[0], "%s", pci[i]);
+    }
+}
+
+/* Whether NVML device i is one the run uses. */
+static int selected(int i)
+{
+    if (g_n_select == 0)
+        return 1;
+    if (!g_nvml.PciInfo || !g_nvml.dev[i])
+        return 1;
+    unsigned char info[256];
+    memset(info, 0, sizeof info);
+    if (g_nvml.PciInfo(g_nvml.dev[i], info) != 0)
+        return 1;
+    info[15] = '\0';               /* busIdLegacy, "0000:01:00.0" */
+    for (int k = 0; k < g_n_select; k++)
+        if (!strcasecmp((const char *) info, g_select[k]))
+            return 1;
+    return 0;
+}
+
+/* Which NVML devices the current run samples, decided once per reset so the
+   per-iteration sample does not query PCI info. */
+static int g_use[VB_POWER_MAX_SRC];
+
 void vb_gpu_clocks_reset(vb_gpu_clocks *g)
 {
     memset(g, 0, sizeof *g);
     g->temp_c_first = g->temp_c_last = g->temp_c_max = -1;
     /* Only meaningful once NVML is up, which vb_power_open() does. Sampling
        before that simply records nothing. */
-    g->n_devices = g_nvml.ready ? g_nvml.n_dev : 0;
+    for (int i = 0; i < VB_POWER_MAX_SRC; i++) {
+        g_use[i] = g_nvml.ready && i < g_nvml.n_dev && g_nvml.dev[i] &&
+                   selected(i);
+        g->n_devices += g_use[i];
+    }
 }
 
 void vb_gpu_clocks_sample(vb_gpu_clocks *g)
@@ -673,7 +716,8 @@ void vb_gpu_clocks_sample(vb_gpu_clocks *g)
         void *h = g_nvml.dev[i];
         unsigned mhz = 0;
 
-        if (!h || g_nvml.Clock(h, VB_NVML_CLOCK_SM, &mhz) != 0 || mhz == 0)
+        if (!h || !g_use[i] ||
+            g_nvml.Clock(h, VB_NVML_CLOCK_SM, &mhz) != 0 || mhz == 0)
             continue;
         got = 1;
         if (mhz > sm_hi)

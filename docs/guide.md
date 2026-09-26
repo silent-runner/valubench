@@ -190,16 +190,42 @@ of "GPU kernels when the system has OpenCL, CPU-only when it does not".
 
 ```
 $ ./build/valubench --list-devices
-[0] Intel(R) UHD Graphics
-     vendor    Intel(R) Corporation
-     type      GPU, 24 compute units @ 750 MHz
-     memory    14373 MiB global, 4095 MiB max allocation
-     platform  Intel(R) OpenCL Graphics (OpenCL 3.0 )
-     driver    23.43.027642, device OpenCL 3.0 NEO
+[0] NVIDIA RTX PRO 2000 Blackwell
+     vendor    NVIDIA Corporation
+     type      GPU, 34 compute units @ 1957 MHz
+     memory    15888 MiB global, 3972 MiB max allocation
+     pci       0000:01:00.0
+     opencl    NVIDIA CUDA (OpenCL 3.0 CUDA 13.3.80), driver 610.57.04, max wg 1024
 ```
+
+Each device is listed once, with a line for every API that reaches it: a card
+is identified by its PCI address, so the same card seen through two APIs is one
+device, and `--device` indices mean the same thing whichever API a kernel uses.
 
 Device kernels appear in `--list` as `ocl-s1..s4` and take part in autotune
 alongside the CPU ones.
+
+**Every device kernel is one source, compiled for the device in front of it.**
+Each hash has one core under `src/kernels/gpu/`, and the backend composes it
+with a dialect header and the primitive spellings, then compiles it at run
+time. How rotate, Ch and Maj are spelled is chosen per device vendor -- plain C
+unless measurement shows a vendor-specific spelling doing better, as a PTX
+funnel shift does for the 32-bit rotate on NVIDIA -- and the result records the
+choice as `primitives` and `steers`. `--primitives neutral` compiles plain C
+everywhere, which is how to size what steering is worth on a device.
+
+**Pinning the launch.** `--device-geometry GLOBAL,LOCAL` uses one launch
+geometry instead of tuning it, and refuses one the kernel cannot use. The tuner
+is the right default for a single number, but it is chosen by short probes and
+can land differently from run to run; comparing two compiled kernels -- two
+APIs, or steered against neutral -- wants the same launch on both sides, and
+the result records `geometry_source` so a pinned run is never mistaken for a
+tuned one.
+
+**Seeing what was compiled.** `--dump-device-code DIR` writes each program as
+compiled: the composed source, the compiler's output where the API exposes it
+(PTX on NVIDIA's OpenCL), and a log with the build options and the compiler's
+messages -- on NVIDIA, its register report.
 
 **Multiple devices run concurrently.** `--device` takes an index, a
 comma-separated list, or `all` (the default). The corpus is split into
@@ -239,7 +265,7 @@ ocl-s3     955e84cbbc05470019604a2bd9ff2821
 ```
 
 The corpus is uploaded once outside the timed region, and digests are reduced
-to one `uint4` per work-group on the device before readback — writing a partial
+to one digest per work-group on the device before readback — writing a partial
 per work-item would put megabytes of transfer inside the timed region and
 corrupt the very PCIe measurement the GPU work exists to make.
 
@@ -251,8 +277,8 @@ things are decoupled deliberately:
 | Knob | Chosen by | Why it is separate |
 |---|---|---|
 | corpus size | `--working-set-kb` | serves the memory axis |
-| launch geometry | measured at init | a device property, not a workload one |
-| corpus sweeps per launch | measured at init | amplifies work without growing the footprint |
+| launch geometry | measured at init, or `--device-geometry` | a device property, not a workload one |
+| corpus sweeps per launch | measured at init, at the iteration count being run | amplifies work without growing the footprint |
 
 Each work-item strides over as many groups as it takes to cover the corpus, so
 the launch is sized for the device while the corpus stays free. Sweep count is

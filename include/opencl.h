@@ -93,6 +93,14 @@ typedef struct {
        work-item, so this bounds the work-group size for wide digests --
        SHA-512 at 512 work-items wants 32 KiB, which not every device has. */
     cl_ulong local_mem;
+
+    /* PCI identity, which is what lets one card seen through OpenCL and
+       another API be recognised as one device. vendor_id is the PCI vendor
+       for a GPU and whatever the platform chooses otherwise; pci is
+       "dddd:bb:dd.f", or "" where no query answered. */
+    cl_uint  vendor_id;
+    char     pci[16];
+    int      pci_no_domain;   /* from a query that carries no domain */
 } vb_ocl_device;
 
 /*

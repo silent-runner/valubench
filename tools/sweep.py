@@ -61,6 +61,11 @@ class Capabilities:
         # Empty from a binary that predates pinned staging, which then gets no
         # --host-memory flag at all rather than one it would reject.
         self.host_memory_modes = tuple(doc.get("host_memory_modes", ()))
+        # Likewise for the device-layer switches: absent from older binaries,
+        # which then get none of the flags.
+        self.primitives_modes = tuple(doc.get("primitives_modes", ()))
+        self.compile_modes = tuple(doc.get("compile_modes", ()))
+        self.pinned_geometry = bool(doc.get("device_geometry", False))
         # Autotune restrictions. Older binaries have no such notion, so this
         # degrades to "any" rather than failing.
         self.where_filters = tuple(doc.get("where_filters", ("any",)))
@@ -133,6 +138,21 @@ CSV_COLUMNS = [
     "streams",
     "runs_on",
     "device",
+    # device provenance: which API, what compiled it, and how it launched --
+    # enough to group two APIs on one card, and never to confuse them
+    "backend",
+    "device_compiler",
+    "device_compiler_version",
+    "compile_mode",
+    "device_driver",
+    "platform",
+    "pci_address",
+    "primitives",
+    "steers",
+    "geometry_source",
+    "global_work",
+    "local_work",
+    "sweeps_per_launch",
     # results
     "hashes_per_sec",
     "hashes_per_sec_min",
@@ -265,10 +285,13 @@ def build_grid(args, caps):
 
     axes = itertools.product(args.algorithm, args.kernel or [None], args.where,
                              args.transfer, args.host_memory,
-                             args.message_bytes, args.iterations,
-                             args.working_set_kb, args.threads)
+                             args.primitives, args.compile_mode,
+                             args.device_geometry, args.message_bytes,
+                             args.iterations, args.working_set_kb,
+                             args.threads)
 
-    for alg, kern, where, xfer, hm, mb, it, ws, th in axes:
+    for (alg, kern, where, xfer, hm, prim, cmode, geom, mb, it, ws,
+         th) in axes:
         # Host memory only changes what a streaming upload reads from, so on a
         # resident point every value is the same measurement. Keep the first.
         if xfer != "stream" and hm != args.host_memory[0]:
@@ -277,6 +300,18 @@ def build_grid(args, caps):
         # A forced kernel only computes one algorithm; pairing it with the
         # others would be a guaranteed usage error on every such point.
         if kern and "/" in kern and kern.split("/")[0] != alg:
+            continue
+        # The device-layer axes mean nothing to a CPU kernel, and the compile
+        # mode only to CUDA: keep the first value there, as for host memory.
+        runs_on_cpu = (where == "cpu" or
+                       (kern and caps.kernels.get(caps.resolve_kernel(kern, alg)
+                                                  or "", {}).get("where")
+                        == "cpu"))
+        if runs_on_cpu and (prim != args.primitives[0] or
+                            geom != args.device_geometry[0]):
+            continue
+        is_cuda = bool(kern) and "/cuda" in (caps.resolve_kernel(kern, alg) or "")
+        if not is_cuda and kern and cmode != args.compile_mode[0]:
             continue
 
         # Resolve against the registry the binary reports rather than trusting
@@ -314,6 +349,9 @@ def build_grid(args, caps):
             "where": where,
             "transfer": xfer,
             "host_memory": hm,
+            "primitives": prim,
+            "compile_mode": cmode,
+            "device_geometry": geom,
             "message_bytes": mb,
             "iterations": it,
             "working_set_kb": ws,
@@ -330,6 +368,45 @@ def build_grid(args, caps):
     return points, unique
 
 
+def backend_of(kernel):
+    """The device API in a kernel name -- "ocl" in md5/ocl-s1 -- or None."""
+    if not kernel or "/" not in kernel:
+        return None
+    isa = kernel.split("/", 1)[1].rsplit("-s", 1)[0]
+    return isa if isa in ("ocl", "cuda", "hip") else None
+
+
+def interleave(points):
+    """
+    Put points that differ only in their device API side by side, rotating
+    which goes first from one group to the next.
+
+    GPU clocks drift harder than CPU ones -- a power cap, a card warming up --
+    so sweeping one API and then the other would put all the drift on one
+    side of the comparison. A/B, B/A spreads it evenly. The compile mode is
+    folded in as well, so a CUDA ptx-jit and cubin pair interleave with the
+    OpenCL point they are compared against.
+    """
+    if len({backend_of(p["kernel"]) for p in points} - {None}) < 2:
+        return points
+    groups, order = {}, []
+    for p in points:
+        b = backend_of(p["kernel"])
+        kern = p["kernel"].replace("/%s-" % b, "/*-") if b else p["kernel"]
+        key = tuple((f, p[f]) for f in sorted(p)
+                    if f not in ("kernel", "compile_mode")) + (kern,)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(p)
+    out = []
+    for i, key in enumerate(order):
+        g = groups[key]
+        r = i % len(g)
+        out.extend(g[r:] + g[:r])
+    return out
+
+
 def point_id(p):
     """
     A stable identifier for a grid point, written into every row.
@@ -341,10 +418,12 @@ def point_id(p):
     verbatim sidesteps both, and reads well enough in the CSV to be useful to a
     person scanning it.
     """
-    return ("alg=%s;kernel=%s;where=%s;transfer=%s;hm=%s;mb=%s;it=%s;ws=%s;"
-            "thr=%s"
+    return ("alg=%s;kernel=%s;where=%s;transfer=%s;hm=%s;prim=%s;cm=%s;"
+            "geom=%s;mb=%s;it=%s;ws=%s;thr=%s"
             % (p["algorithm"], p["kernel"] or "auto", p.get("where", "any"),
                p["transfer"], p.get("host_memory") or "-",
+               p.get("primitives") or "-", p.get("compile_mode") or "-",
+               p.get("device_geometry") or "tuned",
                p["message_bytes"], p["iterations"], p["working_set_kb"],
                p["threads"]))
 
@@ -440,6 +519,17 @@ def run_point(args, caps, point, refs=None):
             cmd += ["--expect", got]
     if point.get("host_memory") and caps.host_memory_modes:
         cmd += ["--host-memory", point["host_memory"]]
+    # Device-only switches go only where a device kernel can honour them:
+    # the binary refuses them on a run that can only pick a CPU kernel.
+    device_ok = point.get("where") != "cpu" and not (
+        point["kernel"] and caps.kernels[point["kernel"]]["where"] == "cpu")
+    if device_ok and point.get("primitives") and caps.primitives_modes:
+        cmd += ["--primitives", point["primitives"]]
+    if (device_ok and point.get("compile_mode") and caps.compile_modes and
+            (not point["kernel"] or "/cuda" in point["kernel"])):
+        cmd += ["--compile-mode", point["compile_mode"]]
+    if device_ok and point.get("device_geometry"):
+        cmd += ["--device-geometry", point["device_geometry"].replace("x", ",")]
     if point["kernel"]:
         cmd += ["--kernel", point["kernel"]]
     elif point.get("where", "any") != "any":
@@ -531,6 +621,22 @@ def _row_from_result(d, status, point=None):
         "streams": k["streams"],
         "runs_on": k["runs_on"],
         "device": dev.get("name", ""),
+        "backend": dev.get("backend", ""),
+        "device_compiler": dev.get("compiler", ""),
+        "device_compiler_version": dev.get("compiler_version", ""),
+        "compile_mode": dev.get("compile_mode", ""),
+        "device_driver": dev.get("driver", ""),
+        "platform": dev.get("platform", ""),
+        "pci_address": dev.get("pci_address", ""),
+        "primitives": dev.get("primitives", ""),
+        "steers": dev.get("steers", ""),
+        "geometry_source": dev.get("geometry_source", ""),
+        # The launch a point used. It stopped at the JSON before, so a
+        # capture's geometry was unrecoverable -- which is how a tuner that
+        # picked too small a grid passed for a memory cliff.
+        "global_work": dev.get("global_work", ""),
+        "local_work": dev.get("local_work", ""),
+        "sweeps_per_launch": dev.get("corpus_sweeps_per_launch", ""),
         "hashes_per_sec": "%.6g" % r["median"],
         "hashes_per_sec_min": "%.6g" % r["min"],
         "compressions_per_sec": "%.6g" % r["compressions_per_second"],
@@ -998,6 +1104,18 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                     help="pinned, pageable -- what a streaming upload reads "
                          "from. A list makes it an axis on streaming points; "
                          "resident points ignore it.")
+    ap.add_argument("--primitives", default="steered", metavar="LIST",
+                    help="steered, neutral -- how device kernels spell the "
+                         "hash primitives. A list makes it an axis; CPU "
+                         "points ignore it.")
+    ap.add_argument("--compile-mode", default="ptx-jit", metavar="LIST",
+                    help="ptx-jit, cubin -- how CUDA kernels are compiled. A "
+                         "list makes it an axis on CUDA points.")
+    ap.add_argument("--device-geometry", default=None, metavar="LIST",
+                    help="pin the device launch instead of tuning it: "
+                         "GLOBALxLOCAL, e.g. 139264x128, and a list makes it "
+                         "an axis. The same launch on every API is the "
+                         "control for comparing compiled kernels.")
     ap.add_argument("--message-bytes", default="55", metavar="LIST")
     ap.add_argument("--iterations", default="1", metavar="LIST")
     ap.add_argument("--working-set-kb", default="1024", metavar="LIST")
@@ -1083,6 +1201,27 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         args.host_memory = parse_choice_list(
             args.host_memory, "--host-memory",
             caps.host_memory_modes or ("pinned",))
+        args.primitives = parse_choice_list(
+            args.primitives, "--primitives",
+            caps.primitives_modes or ("steered",))
+        args.compile_mode = parse_choice_list(
+            args.compile_mode, "--compile-mode",
+            caps.compile_modes or ("ptx-jit",))
+        if args.device_geometry:
+            if not caps.pinned_geometry:
+                raise ValueError("--device-geometry: this binary cannot pin "
+                                 "the launch")
+            geoms = parse_choice_list(args.device_geometry,
+                                      "--device-geometry", None)
+            for g in geoms:
+                parts = g.split("x")
+                if len(parts) != 2 or not all(x.isdigit() and int(x) > 0
+                                              for x in parts):
+                    raise ValueError("--device-geometry: want GLOBALxLOCAL, "
+                                     "got %r" % g)
+            args.device_geometry = geoms
+        else:
+            args.device_geometry = [None]
         args.where = parse_choice_list(args.where, "--where",
                                        caps.where_filters)
         args.kernel = (parse_choice_list(args.kernel, "--kernel", None)
@@ -1106,6 +1245,7 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                      "(%d..%d)" % (flag, value, low, high))
 
     points, skipped = build_grid(args, caps)
+    points = interleave(points)
 
     for note in skipped:
         print("sweep: skipping %s" % note, file=sys.stderr)

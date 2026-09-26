@@ -63,7 +63,8 @@ if "$BIN" --list --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 need = ("schema", "benchmark", "algorithms", "kernels", "limits",
-        "exit_codes", "transfer_modes", "host_memory_modes")
+        "exit_codes", "transfer_modes", "host_memory_modes",
+        "primitives_modes", "backends", "devices")
 missing = [k for k in need if k not in d]
 if missing:
     print("  FAIL  output-contract  capabilities missing: %s" % ", ".join(missing))
@@ -148,6 +149,18 @@ expect_exit 2 "negative"              "$BIN" --threads -4
 expect_exit 2 "out of range"          "$BIN" --samples 0
 expect_exit 2 "unknown algorithm"     "$BIN" --algorithm nosuchalg
 expect_exit 2 "unknown host memory"   "$BIN" --host-memory locked
+expect_exit 2 "unknown primitives"    "$BIN" --primitives fast
+expect_exit 2 "geometry, one number"  "$BIN" --device-geometry 4096
+expect_exit 2 "geometry, zero"        "$BIN" --device-geometry 0,64
+expect_exit 2 "geometry, not numbers" "$BIN" --device-geometry a,b
+expect_exit 2 "geometry, negative"    "$BIN" --device-geometry -4096,64
+expect_exit 2 "dump dir missing"      "$BIN" --dump-device-code /nonexistent/valubench
+# A device-only option on a run that can only pick a CPU kernel would do
+# nothing at all -- an empty dump directory, a geometry never used.
+expect_exit 2 "geometry with --where cpu" \
+    "$BIN" --device-geometry 4096,64 --where cpu
+expect_exit 2 "neutral primitives on a CPU kernel" \
+    "$BIN" --primitives neutral --kernel md5/scalar-s1
 
 # --device used to bound at VB_MAX_THREADS (1024) while the measurement path
 # reserved VB_OCL_MAX_DEVICES (32), and copied between them unchecked. Indices

@@ -103,6 +103,7 @@ typedef intptr_t cl_context_properties;
 #define CL_PLATFORM_VENDOR               0x0903
 
 #define CL_DEVICE_TYPE                   0x1000
+#define CL_DEVICE_VENDOR_ID              0x1001
 #define CL_DEVICE_MAX_COMPUTE_UNITS      0x1002
 #define CL_DEVICE_MAX_WORK_GROUP_SIZE    0x1004
 #define CL_DEVICE_MAX_CLOCK_FREQUENCY    0x100C
