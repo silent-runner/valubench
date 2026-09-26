@@ -34,9 +34,9 @@ workload far to the right of the roofline ridge point *at the rate the machine
 can hash* — so a slow kernel never reaches the ridge and a fast one does. On
 the development N100 and on Graviton3 the corpus leaving cache costs a tenth of
 throughput and almost nothing respectively; on a Zen 5 core running AVX-512 it
-costs 44% single-threaded, and across all sixteen cores of a desktop Zen 5 part
-it costs a factor of eight, flattening onto a DRAM floor. On that same machine,
-in the same sweep, AVX2 and scalar barely move.
+costs close to half, single-threaded, and across all sixteen cores of a desktop
+Zen 5 part it costs most of the throughput, flattening onto a DRAM floor. On
+that same machine, in the same sweep, AVX2 and scalar barely move.
 
 This section previously said MD5 "barely becomes memory-bound" and that a
 genuine memory-bound regime would need much larger messages or a
@@ -49,8 +49,8 @@ the same thing as saying a faster kernel is easier to starve.
 **The default is not a neutral choice on every part.** `--working-set-kb 1024`
 resolves to a 1,008 KiB corpus, which on a core with 1 MiB of L2 sits on the
 capacity boundary rather than clear of either side. What that costs depends on
-the kernel: on a desktop Zen 5 part `md5/avx512-s4` loses about 4% there while
-`s6` loses 31% and `s8` 40%, and AVX2 and scalar do not notice. Two
+the kernel: on a desktop Zen 5 part `md5/avx512-s4` loses a few percent there
+while `s6` and `s8` lose a third or more, and AVX2 and scalar do not notice. Two
 consequences worth knowing before quoting a single-thread number:
 
 - **The stream ordering inverts across the boundary.** In L2 the ranking is
@@ -209,11 +209,16 @@ reference value. Because XOR is associative, folding the slices reproduces the
 single-device checksum, so **the fingerprint is identical at any device count**:
 
 ```
-$ valubench --json --kernel ocl-s1 --device 0    | grep checksum
+$ valubench --json --kernel md5/ocl-s1 --device 0    | grep checksum
     "checksum": "955e84cbbc05470019604a2bd9ff2821"
-$ valubench --json --kernel ocl-s1 --device 0,0  | grep checksum
+$ valubench --json --kernel md5/ocl-s1 --device 0,1  | grep checksum
     "checksum": "955e84cbbc05470019604a2bd9ff2821"
 ```
+
+The second line needs two devices. Naming one device twice, as `--device 0,0`,
+is rejected rather than accepted as a cheap way to show the same thing: it would
+give one physical card two slices of the corpus and count it twice in the
+aggregate throughput.
 
 Devices are dispatched with an enqueue-all-then-collect-all pass rather than a
 loop of blocking runs, which would serialise them.
@@ -272,8 +277,7 @@ work to fill the device — 768 messages is 12 groups, and no launch geometry
 turns that into GPU-scale parallelism. Sweeps amplify total work but not
 parallelism.
 
-The integrated GPU beats every CPU kernel on this chip by a wide margin —
-by roughly 3.5x.
+The integrated GPU beats every CPU kernel on this chip by a wide margin.
 
 ### When a device number is not plausible
 
@@ -373,10 +377,10 @@ and Linux numbers the physical cores before their siblings, so a count between
 the two fills some cores twice and leaves others single. The corpus is split
 equally regardless, so the doubled cores become stragglers and the whole batch
 waits on them. On a 16-core, 32-thread desktop Zen 5 part the seventeenth
-thread costs **21%** against sixteen, and the figure does not recover to its
-sixteen-thread value until about twenty-four. Full occupancy is worth 16% over
-one-thread-per-core, so SMT does pay — but only once every core is loaded
-symmetrically. This is the same effect the equal split has across a
+thread costs **about a fifth of the throughput** against sixteen, and the
+figure does not recover to its sixteen-thread value until about twenty-four.
+Full occupancy is worth a modest gain over one-thread-per-core, so SMT does
+pay — but only once every core is loaded symmetrically. This is the same effect the equal split has across a
 heterogeneous set of devices, described under "Multiple devices run
 concurrently" above.
 
@@ -403,12 +407,12 @@ corpus placement, a thermal state and a boost state. It is a good measure of
 whether a run was internally steady and a poor measure of whether the number
 will come back the same next time.
 
-The gap can be large. On a desktop Zen 5 part, twelve consecutive
-single-thread runs at the default working set — sitting on the L2 boundary
-described under "Working set" — spanned 376.6 to 453.1 MH/s, a run-to-run
-coefficient of variation of **7.13%**, while each individual run reported
-about **0.084%**. Moving the corpus clear of the boundary brought run-to-run
-variation to 0.16%, and the two figures then agreed.
+The gap can be large. Twelve consecutive single-thread runs at the default
+working set — sitting on the L2 boundary described under "Working set" — varied
+from one another by **nearly two orders of magnitude more** than any single run
+reported about itself. Moving the corpus clear of the boundary brought the two
+into agreement. (Ryzen 9 9950X, gcc 16.2.1, 2026-09-09: 7.13% run-to-run
+against about 0.084% within a run, and 0.16% once clear of the boundary.)
 
 So a low `cov_percent` is necessary and not sufficient. Where a number carries
 a decision, **repeat the whole process and use the spread between runs as the
@@ -420,10 +424,10 @@ work is spread across lanes, streams, threads or devices. Every kernel on every
 machine must produce the same value, which makes it a portable fingerprint:
 
 ```
-$ ./build/valubench --json --kernel scalar-s1 --threads 1 | grep checksum
-    "checksum": "4634a0fbf02488f992251744c0a8f10b",
-$ ./build/valubench --json --kernel avx2-s4   --threads 4 | grep checksum
-    "checksum": "4634a0fbf02488f992251744c0a8f10b",
+$ ./build/valubench --json --kernel md5/scalar-s1 --threads 1 | grep checksum
+    "checksum": "955e84cbbc05470019604a2bd9ff2821",
+$ ./build/valubench --json --kernel md5/avx2-s4   --threads 4 | grep checksum
+    "checksum": "955e84cbbc05470019604a2bd9ff2821",
 ```
 
 It is a fingerprint *within* a workload id, not across one: different message
@@ -454,6 +458,12 @@ and any conditions that make the result less trustworthy:
 Exit status: `0` success, `1` verification failure, `2` usage error, `3` result
 too noisy to trust.
 
+Exit `2` also covers a kernel that **could not run** -- a corpus too large for
+memory, worker threads that would not start, a device that could not be set
+up. Those are said as such on stderr ("could not run: ...") and are never
+reported as a verification failure: exit `1` is reserved for the hardware
+computing a wrong digest, which is why it stops a sweep and exit `2` does not.
+
 ## Kernels
 
 One binary contains every ISA path; selection happens at runtime via CPUID.
@@ -474,7 +484,7 @@ avx512-s4    AVX512       16        4  no
 dependency chain, and SIMD width does not break it — all lanes of a vector
 advance in lockstep as one chain. A one-stream kernel measures dependency
 latency, not throughput. Interleaving independent chains is what fills the
-pipeline, so every ISA is instantiated at 1–4 streams and the harness picks the
+pipeline, so every ISA is instantiated at 1, 2, 3, 4, 6 and 8 streams and the harness picks the
 winner by measurement rather than assumption:
 
 ```
@@ -486,14 +496,14 @@ Autotune:
   avx2-s4            ...
 ```
 
-Interleaving alone, with no change of instruction set, is worth **1.70x** on a
-genuinely scalar path on an Intel N100 — 9.36 MH/s at one stream against 15.92
-at three. It peaks at three there and falls back at four, because four streams
-of MD5 state stop fitting in sixteen general-purpose registers.
+Interleaving alone, with no change of instruction set, is worth **well over half
+again** on a genuinely scalar path on an Intel N100. It peaks at three streams
+there and falls back at four, because four streams of MD5 state stop fitting in
+sixteen general-purpose registers.
 
-An earlier figure of 3.1x for this was wrong: the compiler was vectorising the
-scalar kernel, so the comparison was scalar against SSE2 rather than one stream
-against three.
+An earlier, much larger figure for this was wrong: the compiler was vectorising
+the scalar kernel, so the comparison was scalar against SSE2 rather than one
+stream against three.
 
 ### The one kernel where streams mostly do not help
 
@@ -512,8 +522,10 @@ unit, so extra streams buy little and cost registers.
 part.** On all three Intel parts in the database the ordering is monotonic and
 one stream wins. On both Zen 5 parts it is not: throughput dips at two streams,
 peaks at three, and only then falls away. That is why the harness measures
-instead of applying a rule — a rule learned from one vendor picks a variant
-about 20% off the best on the other.
+instead of applying a rule. Carrying the Intel rule to AMD costs only a few
+percent, but carrying over the rule every *other* kernel follows — more streams
+are better — picks a worse variant on every part measured, and on AMD a
+substantially worse one.
 
 **Read the SHA-NI figure as a ratio, never as an integer-SIMD number.** It is
 also flattered by this CPU: Gracemont is an E-core with a 128-bit vector
@@ -626,8 +638,8 @@ than searched, exactly like N\*. If the device computes an iteration no faster
 than the CPU does, the curves never cross and the tool says so instead of
 extrapolating. Measured on the development box, where
 the answer is sobering: against four cores rather than one, the iGPU's compute
-advantage collapses from 5.15x to roughly 1.6x, and offload only pays at all
-after a few iterations have amortised the upload.
+advantage collapses from several-fold to well under twofold, and offload only
+pays at all after a few iterations have amortised the upload.
 
 Two caveats. The figures above are from an integrated GPU, where there is no
 PCIe at all and the "transfer" is a copy within system RAM; the number that
@@ -641,8 +653,9 @@ pair.
 `tools/run.sh` captures the environment, gates on `make check`, runs the matrix,
 and leaves one tarball. Seven CPU phases — the ISA ladder, downclocking, energy,
 the SHA unit, all three algorithms, stream interleaving, and the two workload
-axes — then four device phases if the machine has an OpenCL device: the PCIe
-crossover, device stream counts, the memory axis, and multi-device slicing.
+axes — then five device phases if the machine has an OpenCL device: the PCIe
+crossover, device stream counts, the memory axis, the compute plateau with the
+corpus resident, and multi-device slicing.
 Phases that need hardware the machine lacks skip themselves and say so.
 
 ```

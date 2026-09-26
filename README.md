@@ -32,22 +32,24 @@ Four questions it answers with numbers rather than reasoning:
 
 - **What is a wider vector unit worth here?** Not in theory — measured, rung by
   rung, from scalar to AVX-512 or NEON. Doubling the register width is worth
-  1.93x on one core and 1.06x on another, because the second cracks every
-  256-bit operation into halves. Same source, same instructions.
+  close to 2x on one core and almost nothing on another, because the second
+  cracks every 256-bit operation into halves. Same source, same instructions.
 - **Is a dedicated accelerator worth using?** A CPU's fixed-function SHA unit
-  has measured anywhere from 2.13x *faster* than the vector path beside it to
-  0.21x as fast — a 10x spread. On every part with a capture it is the
-  *slower* of the two, and how much slower depends entirely on the vector path
-  beside it. Which one you have decides whether using it is a win or a 79%
-  loss.
+  has measured anywhere from more than twice as fast as the vector path beside
+  it to about a fifth as fast. On every part with a capture it is the *slower*
+  of the two, and how much slower depends entirely on the vector path beside
+  it. Which one you have decides whether using it is a clear win or gives up
+  most of the throughput.
 - **When does offloading to a GPU pay?** Two separate numbers, because they
   disagree: N\* is where compute overtakes the PCIe transfer, and break-even is
-  where the accelerator beats the whole host CPU. On an A10 those were 139 and
-  42 iterations, so there is a wide band where the bus binds and offloading is
-  still right.
+  where the accelerator beats the whole host CPU. On an A10 break-even came
+  well below N\*, so there is a wide band where the bus binds and offloading
+  is still right.
 - **Where does the memory system take over?** A fast enough kernel outruns DRAM
-  on the same data a narrower one does not — AVX-512 losing 44% past the
-  last-level cache while AVX2 loses 3%, and burning 62% *more* power to do it.
+  on the same data a narrower one does not — AVX-512 losing close to half its
+  throughput past the last-level cache while AVX2 barely moves. And stalling is
+  not cheaper: on one part the package drew *more* power waiting on DRAM than
+  it did computing.
 
 **And it answers them about the machine in front of you**, which is the point.
 Every figure above came from running this on a specific part; none of them
@@ -73,8 +75,8 @@ So the design is built around not fooling yourself:
 - **The environment is captured** with every result: CPU, ISA path actually
   taken, governor, clock, compiler, thread count, device and driver. A number
   without its machine is not comparable to anything, and on one part and one
-  instruction set four compilers spanned 4.15x — more than any architectural
-  difference this project has measured.
+  instruction set the choice of compiler moved throughput by a larger factor
+  than any architectural difference this project has measured.
 - **One binary, runtime dispatch, no `-march=native`.** The build cannot depend
   on the machine that produced it.
 
@@ -204,15 +206,16 @@ Known gaps, in the order they matter:
   width and instruction-set generation stay conflated on that side.
 - **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
   Rusticl have never run this.
-- **Every transfer figure is pageable memory.** An A10 sustained 10.9 GB/s over
-  PCIe 4.0 x16, roughly half what pinned staging would achieve, which moves the
-  crossover by about that factor.
+- **Every transfer figure is pageable memory.** An A10 on PCIe 4.0 x16 sustained
+  roughly half what pinned staging would achieve, which moves the crossover by
+  about that factor.
 - **Overlapped transfer and compute.** Streaming uploads then launches, in
   order. The reported ratio already answers the pipelined question, so this
   concerns achieved throughput rather than correctness of the ratio.
 - **Nothing pins the toolchain, and the toolchain is the largest effect in the
-  project.** Four compilers span 4.15x on one part and one instruction set,
-  against at most 1.20x from any instruction-set choice measured anywhere. Even
+  project.** Across four compilers on one part and one instruction set, the
+  spread is several times larger than any instruction-set choice measured
+  anywhere. Even
   on a settled path the compiler changes *which kernel wins*, so autotune's
   pick is toolchain-dependent. Results are comparable within a compiler and not
   across one.
