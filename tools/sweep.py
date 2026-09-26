@@ -177,6 +177,12 @@ CSV_COLUMNS = [
     "kernel_ns_per_pass",
     "transfer_ns_per_pass",
     "overlap_efficiency",
+    # the device's clock over the timed region, and what limited it; a
+    # power-capped card runs slower when kept busy, which is the difference
+    # between a burst and a sustained figure
+    "gpu_mhz_min",
+    "gpu_mhz_max",
+    "gpu_throttle",
     # provenance
     "verified",
     "checksum",
@@ -686,6 +692,9 @@ def _row_from_result(d, status, point=None):
         "overlap_efficiency":
             "" if "overlap_efficiency" not in dev
             else "%.4g" % dev["overlap_efficiency"],
+        "gpu_mhz_min": dev.get("gpu_clock_mhz", {}).get("min", ""),
+        "gpu_mhz_max": dev.get("gpu_clock_mhz", {}).get("max", ""),
+        "gpu_throttle": dev.get("gpu_throttle_reasons", ""),
         "verified": "true" if d["verification"]["verified"] else "false",
         "checksum": d["verification"]["checksum"],
         "samples": len(r["samples"]),

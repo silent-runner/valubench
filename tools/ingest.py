@@ -61,7 +61,7 @@ NUM = {
     "freq_khz_at_end", "temp_milli_c", "temp_milli_c_at_end", "pinned_cpus",
     "global_work", "local_work", "sweeps_per_launch",
     "hashing_watts", "hashes_per_joule", "hashes_per_joule_machine",
-    "pipeline_chunks", "overlap_efficiency",
+    "pipeline_chunks", "overlap_efficiency", "gpu_mhz_min", "gpu_mhz_max",
 }
 BOOL = {"stable", "verified", "smt_active"}
 
