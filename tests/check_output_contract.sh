@@ -174,6 +174,11 @@ expect_exit 2 "kernel excluded by --backend" \
     "$BIN" --backend cuda --kernel md5/ocl-s1
 expect_exit 2 "compile mode on an OpenCL kernel" \
     "$BIN" --compile-mode cubin --kernel md5/ocl-s1
+expect_exit 2 "import from a missing file" "$BIN" --import-ptx /nonexistent.ptx
+# Imported PTX is one kernel, so it needs --kernel to say which.
+expect_exit 2 "import without --kernel" "$BIN" --import-ptx "$0"
+expect_exit 2 "import for an OpenCL kernel" \
+    "$BIN" --import-ptx "$0" --kernel md5/ocl-s1
 
 # --device used to bound at VB_MAX_THREADS (1024) while the measurement path
 # reserved VB_OCL_MAX_DEVICES (32), and copied between them unchecked. Indices

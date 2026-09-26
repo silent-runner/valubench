@@ -777,6 +777,7 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     opt.pin_local = cfg->pin_local;
     opt.iterations = cfg->iterations;
     opt.compile_mode = cfg->compile_mode;
+    opt.import_ptx = cfg->import_ptx;
 
     vb_dev_ctx ctx[VB_DEV_MAX];
     uint64_t expect[VB_DEV_MAX][VB_MAX_DIGEST_WORDS];

@@ -58,7 +58,9 @@ else.
 `compiler` and `compiler_version` say what compiled the program -- for OpenCL
 the platform, for CUDA `nvrtc` and its version, and on NVIDIA either way the
 NVVM frontend version read from the PTX -- and `compile_mode` how: `driver` for
-OpenCL, `ptx-jit` or `cubin` for CUDA. `steers` lists the primitive spellings compiled in
+OpenCL, `ptx-jit` or `cubin` for CUDA. Under `--import-ptx` the compiler is
+`imported`, its version names the file and the NVVM that built it, and
+`steers` reads `imported`, since they were chosen when the file was built. `steers` lists the primitive spellings compiled in
 (`rotl32=ptx`), empty when every primitive was plain C, and `primitives` says
 whether steering was on at all. `geometry_source` is `pinned` when
 `--device-geometry` chose the launch and `tuned` otherwise; two results are
@@ -115,6 +117,7 @@ did not match, whatever `--where` or `--kernel` restricted the candidates to.
 `--list --json` describes the binary and the machine: `benchmark`, `limits`,
 `defaults`, `exit_codes`, `transfer_modes`, `host_memory_modes`,
 `primitives_modes`, `device_geometry`, `dump_device_code`, `compile_modes`,
+`import_ptx`,
 `backend_filters`, `where_filters`,
 `algorithms` (each with digest and block geometry and its minimum iteration
 message length), `kernels` (each with isa, lanes, streams, `where`, and

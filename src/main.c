@@ -50,16 +50,20 @@ static void usage(FILE *f, const char *argv0)
 "                       with a GPU needs this: otherwise the device kernel\n"
 "                       wins the probe and the result is not a CPU number.\n",
             argv0);
-    /* Two calls because C only promises string literals of 4095 characters,
-       and the help text is longer. */
+    /* Several calls because C only promises string literals of 4095
+       characters, and the help text is longer. */
     fprintf(f,
 "  --threads N          worker threads (default: one per allowed CPU, %u here)\n"
 "  --message-bytes L    message length (default %u, range %u..%u). Raises\n"
 "                       both compute and bytes read per hash.\n"
 "  --iterations N       chained hashes per hash (default 1, max %u). Raises\n"
 "                       compute per hash without touching more memory.\n"
-"                       Requires --message-bytes >= the digest size.\n"
-"  --transfer MODE      how the corpus reaches an OpenCL device:\n"
+"                       Requires --message-bytes >= the digest size.\n",
+            vb_default_threads(),
+            VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
+            VB_MAX_ITERS);
+    fprintf(f,
+"  --transfer MODE      how the corpus reaches a device:\n"
 "                       'resident' (default) uploads it once and launches\n"
 "                       against it; 'stream' re-uploads before every launch,\n"
 "                       putting the PCIe link inside the timed region. Use\n"
@@ -82,6 +86,10 @@ static void usage(FILE *f, const char *argv0)
 "  --backend LIST       restrict autotune to device kernels from these APIs:\n"
 "                       opencl, cuda, comma-separated; 'any' (the default)\n"
 "                       lets every kernel, CPU or device, compete.\n"
+"  --import-ptx FILE    run the --kernel named, a CUDA one, from this PTX\n"
+"                       instead of compiling it -- e.g. what NVIDIA's OpenCL\n"
+"                       compiler produced, from --dump-device-code, to put\n"
+"                       one compiler's code under the other API's runtime.\n"
 "  --compile-mode MODE  how CUDA kernels are compiled: 'ptx-jit' (default)\n"
 "                       has the driver finish NVRTC's PTX, as OpenCL's code\n"
 "                       is finished; 'cubin' finishes it with NVRTC's own\n"
@@ -110,9 +118,7 @@ static void usage(FILE *f, const char *argv0)
 "Exit status: 0 success, 1 verification failure, 2 usage error or the\n"
 "             kernel could not run (no memory, threads, or device),\n"
 "             3 result too noisy to trust.\n",
-            vb_default_threads(),
-            VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
-            VB_MAX_ITERS, VB_MAX_SAMPLES);
+            VB_MAX_SAMPLES);
 }
 
 static void list_kernels(void)
@@ -590,6 +596,15 @@ int main(int argc, char **argv)
             }
             cfg.compile_mode_given = 1;
             device_only = device_only ? device_only : a;
+        } else if (!strcmp(a, "--import-ptx")) {
+            if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
+            cfg.import_ptx = argv[++i];
+            if (access(cfg.import_ptx, R_OK) != 0) {
+                fprintf(stderr, "valubench: --import-ptx: cannot read '%s'\n",
+                        cfg.import_ptx);
+                return VB_EXIT_USAGE;
+            }
+            device_only = device_only ? device_only : a;
         } else if (!strcmp(a, "--backend")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             if (parse_backends(argv[++i], &cfg) != 0) return VB_EXIT_USAGE;
@@ -803,6 +818,14 @@ int main(int argc, char **argv)
     if (action == ACT_REFERENCE) {
         emit_reference_ladder(&cfg, ladder, n_ladder);
         return VB_EXIT_OK;
+    }
+
+    /* Imported code is one kernel -- one algorithm, one stream count -- so
+       autotune cannot choose around it, and only CUDA can load it. */
+    if (cfg.import_ptx && (!k || !k->device || k->backend != VB_BACKEND_CUDA)) {
+        fprintf(stderr, "valubench: --import-ptx needs --kernel to name the "
+                        "CUDA kernel the PTX was built for\n");
+        return VB_EXIT_USAGE;
     }
 
     /* An option that only a device kernel can honour, on a run that can only
