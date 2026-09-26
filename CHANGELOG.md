@@ -7,6 +7,18 @@ outside this repository while a durable format for them is decided.
 
 ### Changed
 
+- **Hashes per joule divides by the hardware that hashed.** It divided by
+  every energy counter in the machine, so a GPU run carried every other card's
+  idle draw and the host's, and a CPU run on a machine whose package counter
+  was unreadable was divided by an idle GPU. Now a device run counts the
+  cards it used, matched to the counters by PCI address, a CPU run the CPU
+  package and DRAM, and a run where an OpenCL device is the CPU both. The
+  whole-machine figure is kept as `hashes_per_joule_machine` -- what
+  `hashes_per_joule` meant before -- and each energy source says whether it
+  was counted. When nothing that hashed was measured the efficiency is
+  reported as unmeasured. The sweep CSV gains `hashing_watts`,
+  `hashes_per_joule` and `hashes_per_joule_machine`; it carried no energy
+  before.
 - **Streaming uploads read pinned host memory by default.** Every transfer
   figure until now came from pageable memory, which the driver stages through
   a bounce buffer; a real offload would use page-locked memory the copy engine
@@ -98,6 +110,9 @@ outside this repository while a durable format for them is decided.
 - **GPU clock telemetry read every NVML device** and kept the highest, so on a
   machine with two cards an idle one could report the clock. It now samples
   only the devices the run used, matched by PCI address.
+- **One card seen by two energy providers could be counted twice** when its
+  PCI address has hex letters: NVML writes them in capitals and sysfs in lower
+  case, and the comparison was case-sensitive.
 - **A heap overflow when `--kernel` names another algorithm's kernel.**
   Forcing a kernel fixes the algorithm, but the kernel was looked up after
   `--message-bytes` and `--expect` had been validated against the default MD5.

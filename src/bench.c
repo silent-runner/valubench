@@ -845,12 +845,20 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     out->device_count = n_use;
     out->threads = 1;
 
-    /* Clock telemetry for these devices only, not every card NVML sees. */
+    /* Clock telemetry for these devices only, not every card NVML sees, and
+       energy attributed to the hardware that hashed: the cards used, and the
+       CPU package only if one of the devices is the CPU itself. */
     {
         const char *pci[VB_DEV_MAX];
-        for (int i = 0; i < n_use; i++)
-            pci[i] = ctx[i].dev.pci;
-        vb_gpu_clocks_select(pci, n_use);
+        int n_gpu = 0, cpu_hashed = 0;
+        for (int i = 0; i < n_use; i++) {
+            if (ctx[i].dev.is_cpu)
+                cpu_hashed = 1;
+            else
+                pci[n_gpu++] = ctx[i].dev.pci;
+        }
+        vb_gpu_clocks_select(pci, n_gpu);
+        vb_power_attribute(&out->power, cpu_hashed, pci, n_gpu);
     }
 
     /* Pinned only if every device got it: a fallback on one of them is the
@@ -1100,6 +1108,7 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
     vb_power_open(&out->power);
 
     if (k->device) {
+        /* measure_device attributes the energy once it knows the devices. */
         rc = measure_device(k, cfg, corpus, out);
         vb_power_close(&out->power);
         /* No sample and a device error means setup failed before any digest
@@ -1119,6 +1128,9 @@ static int measure_with_corpus(const vb_kernel *k, const vb_config *cfg,
         goto done;
     }
     memcpy(out->checksum, expected, sizeof expected);
+
+    /* The CPU hashed and nothing else did. */
+    vb_power_attribute(&out->power, 1, NULL, 0);
 
     vb_pool pool;
     if (pool_create(&pool, k, cfg, corpus, threads) != 0) {

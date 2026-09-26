@@ -73,6 +73,7 @@ static int ocl_enumerate(vb_dev_info *out, int max)
         snprintf(o->pci, sizeof o->pci, "%s", d->pci);
         o->pci_no_domain = d->pci_no_domain;
         o->is_gpu = (d->type & CL_DEVICE_TYPE_GPU) != 0;
+        o->is_cpu = (d->type & CL_DEVICE_TYPE_CPU) != 0;
         o->compute_units = d->compute_units;
         o->clock_mhz = d->clock_mhz;
         o->max_work_group = d->max_work_group;

@@ -38,7 +38,7 @@ The version number moves when a field is removed or its meaning changes.
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
 | `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode `host_memory` and the per-pass transfer figures |
 | `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
-| `energy` | `available`, and either `reason` or the joules/watts/`hashes_per_joule` figures with their `sources` |
+| `energy` | `available`, and either `reason` or the figures: `cpu_package_joules`/`watts`, `gpu_joules`/`watts`, `hashing_joules`/`watts` and `hashes_per_joule` (or `hashing_unmeasured`), `machine_joules` and `hashes_per_joule_machine`, and `sources`, each with `counted` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
 
 Three fields carry more weight than the rest:
@@ -66,6 +66,15 @@ whether steering was on at all. `geometry_source` is `pinned` when
 `--device-geometry` chose the launch and `tuned` otherwise; two results are
 only comparable as compiled kernels at the same `global_work` and
 `local_work`.
+
+**`energy.hashes_per_joule` divides by the hardware that hashed** -- the
+cards the run used, matched by PCI address, and the CPU package when the CPU
+hashed -- which is `hashing_joules`, and each source says whether it was
+`counted`. Until 2026-09-26 it divided by every counter in the machine; that
+figure is now `hashes_per_joule_machine`, so compare an earlier capture's
+`hashes_per_joule` with this one's `hashes_per_joule_machine`. When nothing
+that hashed was measured, `hashes_per_joule` is absent and
+`hashing_unmeasured` says why.
 
 **`environment`, the fields that describe drift rather than state.** Frequency,
 governor, load and temperature are sampled twice: once at startup and again
@@ -172,6 +181,12 @@ as autotune's choice where the request was "pick one".
 batch has a floor of `VB_BATCH_LCM` messages, so several small requests round
 onto the same corpus — which the sweep warns about, and which is why the
 requested value lives in `point_id` instead.
+
+**The energy columns** -- `hashing_watts`, `hashes_per_joule`,
+`hashes_per_joule_machine` -- are empty where no counter measured what they
+describe; `hashes_per_joule` in particular is empty on a CPU row when the
+package counter is unreadable, rather than filled from a card that did not
+hash.
 
 **The device columns are empty on CPU rows**, not missing: `device`,
 `backend`, `device_compiler`, `device_compiler_version`, `compile_mode`,
