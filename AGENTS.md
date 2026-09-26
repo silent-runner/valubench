@@ -28,10 +28,13 @@ why they are worth stating before any change:
 
 There is deliberately no results file in the tree. One existed, accumulated
 figures from five machines and three compilers, and became unmaintainable once
-a kernel bug invalidated a whole column of it — a durable format for tracking
-measurements is still being decided.
+a kernel bug invalidated a whole column of it. Captures now live in a separate
+results directory as the CSVs `tools/sweep.py` writes, and `tools/ingest.py`
+builds a disposable SQLite view over them — see
+[docs/results.md](docs/results.md). Cross-machine conclusions live there too,
+beside the data they interpret.
 
-Until then: **characterise results qualitatively in prose.** "More than double
+In this repository: **characterise results qualitatively in prose.** "More than double
 the best SIMD path" survives a re-measurement; "2.13x" does not. Where a figure
 genuinely carries an argument, state the machine, the compiler and the date
 alongside it, and expect to delete it when it goes stale.

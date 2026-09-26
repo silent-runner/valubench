@@ -61,7 +61,7 @@ while keeping it out of the SSE2 build. This is a constraint, not a preference.
 
 ## Adding an ISA
 
-1. **Write `src/kernels/<name>.c`**: the `OPS_*` (32-bit) and `OPS64_*` (64-bit)
+1. **Write `src/kernels/cpu/<name>.c`**: the `OPS_*` (32-bit) and `OPS64_*` (64-bit)
    operation sets, then two lines:
 
    ```c
@@ -75,14 +75,17 @@ while keeping it out of the SSE2 build. This is a constraint, not a preference.
 
    ```c
    #if VB_HAVE_NEON
-   #  define VB_ISA_NEON(M) VB_FOR_ALGS(M, neon, "NEON", vb_cpu_has_neon, 4, 2)
+   #  define VB_ISA_NEON(M) VB_FOR_ALGS(M, neon, "NEON", vb_cpu_has_neon, 4, 2, NULL, NULL)
    #else
    #  define VB_ISA_NEON(M)
    #endif
    ```
 
-   The last two columns are lanes per register at 32-bit and 64-bit; SHA-512
-   gets the narrow one.
+   The four trailing columns come in pairs. The first pair is lanes per
+   register at 32-bit and 64-bit; SHA-512 gets the narrow one. The second pair
+   is `NULL` for any fixed-width ISA. A vector-length-agnostic ISA such as SVE
+   passes lane counts of `0` instead and names two functions there, which
+   `registry.c` calls once at startup -- see the SVE block in `matrix.h`.
 
 3. **Add build flags** in the top-level `Makefile`: a `KFLAGS_<name>` line, the
    name in `KERNELS`, and a `HAVE_` probe if the compiler might not support it.
@@ -98,7 +101,7 @@ only one algorithm, name it directly:
 ```c
 #if VB_HAVE_SHANI
 #  define VB_ISA_SHANI(M) \
-       VB_FOR_STREAMS(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1)
+       VB_FOR_STREAMS4(M, sha1, shani, "SHA-NI", VB_ALG_SHA1, vb_cpu_has_sha_ni, 1, NULL)
 #else
 #  define VB_ISA_SHANI(M)
 #endif
@@ -155,9 +158,9 @@ is touched, and neither is `registry.c`.
 4. Write `<alg>_kernel_impl.h` (the template) and `instantiate_<alg>.h` (which
    maps `OPS_*` onto its macro names).
 5. Add a block to `instantiate_all.h`.
-6. Add one line to `VB_FOR_ALGS` in [matrix.h](matrix.h). Its two lane columns
-   are per register width at 32-bit and 64-bit; a 64-bit algorithm takes the
-   narrow one.
+6. Add one line to `VB_FOR_ALGS` in [matrix.h](matrix.h), passing the 32-bit
+   or 64-bit lane arguments according to the algorithm's word size: a 64-bit
+   algorithm takes the narrow lane count and its lane function.
 
 **The device kernel** (optional, but the matrix expects one — see the OpenCL
 section below for what each piece does)
@@ -275,12 +278,13 @@ unnoticed either. Every kernel is validated against the scalar reference by
 *reference* fails the RFC 1321 and FIPS 180-4 known-answer vectors in
 `tests/test_hashes.c`, which are independent of both.
 
-Adding a device algorithm is four things: the `.cl` file (the Makefile picks it
-up by wildcard), a row in the `PROGRAMS` table in `src/opencl/backend.c` naming
-its entry point, digest shape and embedded source, and four registry rows. The digest shape is
-two numbers — words and bytes per word — because SHA-512's partials are 64-bit;
-they size the readback, the work-group scratch and the fold, all of which are
-otherwise algorithm-agnostic.
+Adding a device algorithm is two things: the `.cl` file (the Makefile picks it
+up by wildcard) and one line in `VB_FOR_EACH_DEVICE_ALG` in `matrix.h`, naming
+its entry point and digest shape. The `PROGRAMS` table in `src/opencl/backend.c`
+and the four registry rows both expand from that line, so neither is written by
+hand. The digest shape is two numbers — words and bytes per word — because
+SHA-512's partials are 64-bit; they size the readback, the work-group scratch
+and the fold, all of which are otherwise algorithm-agnostic.
 
 **Transfer mode.** By default the corpus is uploaded once at context setup and
 every launch runs against resident data. `--transfer stream` re-uploads before
@@ -308,16 +312,19 @@ initialiser has no such limit and stays warning-clean under `-Wpedantic`.
 | `scalar.c` | portable C | 1 | Fallback; builds anywhere |
 | `sse2.c` | SSE2 | 4 | x86-64 baseline, no runtime check needed |
 | `avx2.c` | AVX2 | 8 | No vector rotate, no 3-input logic |
-| `avx512.c` | AVX-512F | 16 | `vpternlogd` + `vprold`; validated on Cascade Lake |
+| `avx512.c` | AVX-512F | 16 | `vpternlogd` + `vprold`; validated on Cascade Lake and Zen 5 |
 | `shani.c` | SHA-NI | 1 | SHA-1 only; fixed-function, not SIMD |
 | `neon.c` | ARM NEON | 4 | AArch64; `vbslq` gives a 3-input select at 128 bits |
+| `sve.c` | ARM SVE | VLA | Lane count chosen by the hardware, 128-2048 bits; resolved at startup |
+| `sve2.c` | ARM SVE2 | VLA | As SVE, plus three-input select, three-way XOR, xor-rotate and shift-right-insert |
 
 Device kernels live beside this directory in `../gpu/`: `md5.cl`, `sha1.cl`
 and `sha512.cl`. The host-side OpenCL driver that runs them -- context, upload,
 launch, readback -- is `src/opencl/`, and knows nothing about hash functions.
 
-Planned: SVE (ARM). SVE will not share the
-fixed-width structure — it is vector-length agnostic, so it needs a VLA-native
-implementation. See ../../../docs/research.md §4.2. ARM's SHA-1 extension would need its own
-template as well: its instructions decompose the rounds differently from x86's,
-so `sha1_ni_kernel_impl.h` does not carry over.
+Planned: ARM's SHA-1 extension. It would need its own template: its
+instructions decompose the rounds differently from x86's, so
+`sha1_ni_kernel_impl.h` does not carry over. The SVE kernels above do not share
+the fixed-width structure either; they are vector-length agnostic, which is why
+they register a lane function rather than a lane count. See
+../../../docs/research.md §4.2.

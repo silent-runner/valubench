@@ -58,8 +58,13 @@ SELECT working_set_kb, COUNT(DISTINCT checksum) sums, COUNT(DISTINCT part) parts
 FROM m WHERE workload='md5-full-55x1' AND status='ok' AND verified=1
 GROUP BY working_set_kb;          -- sums must be 1 on every row
 
--- pools that did not spread (see check-pinning)
-SELECT capture, kernel, threads FROM m WHERE threads > 1 AND runs_on='cpu';
+-- pools that did not spread: more than one thread on fewer than two CPUs,
+-- the assertion check-pinning makes. A row with pinned_cpus 0 was run with
+-- --no-pin, which is deliberate; 1 is the collapsed pool that under-reported
+-- several-fold on main before 0.6.0. Captures taken before 2026-09-12 have no
+-- pinned_cpus column and cannot be checked this way.
+SELECT capture, source_file, kernel, threads, pinned_cpus
+FROM m WHERE runs_on='cpu' AND threads > 1 AND pinned_cpus < 2;
 ```
 
 ## Machine identity comes from the directory, not the CPU
@@ -76,7 +81,7 @@ so when it meets a prefix it does not recognise.
 
 ## Captures must emit the sweep schema
 
-`tools/sweep.py` writes a 39-column CSV that carries compiler, CPU, governor,
+`tools/sweep.py` writes a CSV that carries compiler, CPU, governor,
 version, checksum and CoV on every row. The ingest reads that and nothing else.
 
 A capture script that hand-rolls its own CSV will be skipped — and a skipped

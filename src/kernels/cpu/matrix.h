@@ -89,7 +89,9 @@
  * simply expands to nothing.
  *
  * Columns: ISA token, display name, availability predicate, 32-bit lanes,
- * 64-bit lanes.
+ * 64-bit lanes, 32-bit lane function, 64-bit lane function. The two lane
+ * functions are NULL for every fixed-width ISA; only a vector-length-agnostic
+ * one (SVE, SVE2) registers lanes of 0 and names them instead.
  */
 #define VB_ISA_SCALAR(M) VB_FOR_ALGS(M, scalar, "scalar", always, 1, 1, NULL, NULL)
 

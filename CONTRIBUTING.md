@@ -3,16 +3,21 @@
 ## Building and testing
 
 ```bash
-sudo apt install build-essential     # the whole requirement for the CPU paths
+sudo apt install build-essential     # the whole requirement to build and run
+sudo apt install python3             # make check only; stdlib, no pip packages
 make                                 # or: make CC=clang
 make check                           # known-answer vectors + every kernel
 make config                          # what this toolchain can build
 ```
 
-`make check` runs two suites: published test vectors (RFC 1321, FIPS 180-4)
-against the scalar references, and every registered kernel against those
-references across message sizes, block boundaries, lane counts and iteration
-counts. Both must pass with zero failures before a change is worth reviewing.
+`make check` runs twelve checks. The two that everything rests on are the
+published test vectors (RFC 1321, FIPS 180-4) against the scalar references,
+and every registered kernel against those references across message sizes,
+block boundaries, lane counts and iteration counts. The rest guard the harness
+around them: pinning, thread-start failure, the JSON and exit-code contract,
+working-set sizing, scalar purity and the power model among them. All must pass
+with zero failures before a change is worth reviewing; the `check:` line in the
+Makefile is the authoritative list.
 
 ## Rules that are not negotiable
 
@@ -143,8 +148,8 @@ Two traps in the obvious fix, both real:
 ## Measuring on rented hardware
 
 `tools/run.sh` captures a whole session in one command — CPU phases, then
-device phases if the machine has an OpenCL device. Two failures are worth pre-empting before either is worth running,
-both learned the expensive way.
+device phases if the machine has an OpenCL device. Several failures are worth
+pre-empting before either is worth running, all learned the expensive way.
 
 **Stop the machine patching itself.**
 
@@ -205,7 +210,7 @@ phase that silently skips itself is worse than one that fails, so check the
 probe rather than the exit status of the install.
 
 **Emit the sweep schema, or the capture will not be readable.** `tools/sweep.py`
-writes the 39-column CSV that `tools/ingest.py` reads, with provenance on every
+writes the CSV that `tools/ingest.py` reads, with provenance on every
 row. A hand-rolled CSV is skipped at ingest, and a skipped file looks exactly
 like a capture nobody took. See [docs/results.md](docs/results.md).
 

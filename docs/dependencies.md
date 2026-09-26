@@ -23,7 +23,9 @@ your distro, check for the file.
 
 ## Minimum: build and run on CPU
 
-**Needs:** a C11 compiler, `make`, and libc headers. Nothing else.
+**Needs:** a C11 compiler, `make`, and libc headers. Nothing else to build and
+run. `make check` also needs `python3` (stdlib only): three of its checks read
+the binary's JSON with it, and fail saying so when it is missing.
 
 ```bash
 # Debian / Ubuntu
@@ -182,7 +184,8 @@ sudo dnf install clinfo python3              # RHEL / Fedora
 
 `clinfo` is useful for diagnosing an OpenCL install independently of valubench.
 `python3` (stdlib only, no pip packages) is needed for
-[`tools/sweep.py`](../tools/sweep.py); the benchmark itself does not use it.
+[`tools/sweep.py`](../tools/sweep.py) and the other scripts in `tools/`, and by
+`make check`; the benchmark itself does not use it.
 
 ---
 

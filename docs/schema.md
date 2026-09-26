@@ -1,6 +1,6 @@
 # Output schemas
 
-valubench emits JSON so that nothing has to scrape human output. Four documents
+valubench emits JSON so that nothing has to scrape human output. Five documents
 are defined, each carrying a `schema` field naming itself and its version.
 
 | schema | produced by | contents |
@@ -8,6 +8,7 @@ are defined, each carrying a `schema` field naming itself and its version.
 | `valubench/result/1` | `--json` | one measurement |
 | `valubench/capabilities/1` | `--list --json` | what this binary can do here |
 | `valubench/devices/1` | `--list-devices --json` | OpenCL devices, or why there are none |
+| `valubench/reference/1` | `--reference-ladder` | expected checksums for a ladder of iteration counts |
 | `valubench/comparison/1` | `tools/compare.py --json` | a diff of two result sets |
 
 ## The compatibility rule
@@ -80,9 +81,10 @@ should not carry an argument on its own.
 **`result.cov_percent` is within-process dispersion, not reproducibility.** The
 samples it summarises share one corpus placement, one thermal state and one
 boost state, so it answers "was this run steady" and not "will this number come
-back". The two can differ by a large factor — a desktop Zen 5 part reported
-0.084% within a run while consecutive runs of the same command spanned 7.13%,
-because the default corpus sat on an L2 capacity boundary. A consumer deciding
+back". The two can differ by a large factor — on a desktop Zen 5 part,
+consecutive runs of one command varied by nearly two orders of magnitude more
+than each run reported about itself, because the default corpus sat on an L2
+capacity boundary. A consumer deciding
 whether a change is real should compare the spread *between* runs; see
 [guide.md](guide.md), "What the coefficient of variation does not cover".
 
@@ -91,6 +93,11 @@ whether a change is real should compare the spread *between* runs; see
 Reported in the capabilities document under `exit_codes`, so a driver need not
 hard-code them: `0` success, `1` verification failure, `2` usage error, `3`
 result too noisy to trust. Exit 3 still produces valid JSON on stdout.
+
+`2` is also used when a kernel could not run at all -- the corpus could not be
+allocated, the worker threads could not all start, or a device could not be set
+up -- with a "could not run" message on stderr. `1` is only ever a digest that
+did not match, whatever `--where` or `--kernel` restricted the candidates to.
 
 ## `valubench/capabilities/1`
 
