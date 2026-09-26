@@ -22,22 +22,10 @@
 static int failures = 0;
 static int checks   = 0;
 
-/*
- * Run one kernel over one corpus, whichever kind it is. Device kernels upload
- * the corpus and drive a context; CPU kernels are a direct call. Both must
- * produce the same checksum -- that invariance is the whole point of the XOR
- * reduction (valubench.h).
- */
-static int run_kernel(const vb_kernel *k, const vb_corpus *c, uint64_t groups,
-                      uint32_t iters, uint64_t out[VB_MAX_DIGEST_WORDS],
-                      char *err, size_t errn)
+/* A context on the first device this kernel's backend reaches. */
+static int open_device(const vb_kernel *k, const vb_corpus *c, uint32_t iters,
+                       vb_dev_ctx *ctx, char *err, size_t errn)
 {
-    if (!k->device) {
-        k->fn(c->words, groups, c->blocks, iters, out);
-        return 0;
-    }
-
-    /* The first device this kernel's backend reaches. */
     vb_device devs[VB_DEV_MAX];
     int n = vb_devices(devs, VB_DEV_MAX), d = 0;
     while (d < n && !devs[d].present[k->backend])
@@ -53,17 +41,119 @@ static int run_kernel(const vb_kernel *k, const vb_corpus *c, uint64_t groups,
     vb_dev_options_default(&opt);
     opt.iterations = iters;
 
-    vb_dev_ctx ctx;
-    if (vb_dev_ctx_init(&ctx, be, &devs[d].via[k->backend], c, k->streams, 0,
+    if (vb_dev_ctx_init(ctx, be, &devs[d].via[k->backend], c, k->streams, 0,
                         c->n_messages / (k->lanes * k->streams), &opt) != 0) {
-        snprintf(err, errn, "%s", ctx.error);
+        snprintf(err, errn, "%s", ctx->error);
         return -1;
     }
+    return 0;
+}
+
+/*
+ * Run one kernel over one corpus, whichever kind it is. Device kernels upload
+ * the corpus and drive a context; CPU kernels are a direct call. Both must
+ * produce the same checksum -- that invariance is the whole point of the XOR
+ * reduction (valubench.h).
+ */
+static int run_kernel(const vb_kernel *k, const vb_corpus *c, uint64_t groups,
+                      uint32_t iters, uint64_t out[VB_MAX_DIGEST_WORDS],
+                      char *err, size_t errn)
+{
+    if (!k->device) {
+        k->fn(c->words, groups, c->blocks, iters, out);
+        return 0;
+    }
+
+    vb_dev_ctx ctx;
+    if (open_device(k, c, iters, &ctx, err, errn) != 0)
+        return -1;
     int rc = vb_dev_ctx_run(&ctx, iters, out);
     if (rc != 0)
         snprintf(err, errn, "%s", ctx.error);
     vb_dev_ctx_free(&ctx);
     return rc;
+}
+
+/*
+ * The streaming paths, which only --transfer stream and overlap use: the
+ * corpus re-uploaded for every pass, from pinned or pageable memory; or
+ * uploaded chunk by chunk into two alternating buffers while earlier chunks
+ * hash, as one stream across several calls, the way the timed samples take
+ * it. Every pass must come out as the single-launch checksum.
+ *
+ * `chunks` 0 is the device's own choice (one, at this size); 3 does not
+ * divide the 13 groups; 1000 is more than there are groups and clamps to one
+ * group per chunk, more chunks per pass than the readback ring holds. Three
+ * calls of two passes each cross call boundaries with chunks already queued,
+ * which is where the pipeline is most likely to go wrong.
+ */
+static void check_streaming(const vb_kernel *k, int pipelined, unsigned chunks,
+                            int pinned)
+{
+    const vb_algorithm *alg = vb_algorithm_by_id(k->alg);
+    const uint32_t iters = 3, msg = vb_alg_min_iter_bytes(alg) + 9;
+    const uint64_t groups = 13, count = groups * (k->lanes * k->streams);
+    uint64_t want[VB_MAX_DIGEST_WORDS];
+    char err[512] = "", what[96];
+    vb_corpus c;
+    vb_dev_ctx ctx;
+
+    snprintf(what, sizeof what, "%s, %s", pipelined ? "overlap" : "stream",
+             pinned ? "pinned" : "pageable");
+    if (pipelined)
+        snprintf(what + strlen(what), sizeof what - strlen(what),
+                 ", %u chunks", chunks);
+
+    checks++;
+    if (vb_corpus_build(&c, alg, k->lanes, 0, count, msg) != 0) {
+        failures++;
+        printf("  FAIL  %s %s: corpus build failed\n", k->name, what);
+        return;
+    }
+    vb_reference_checksum(alg, 0, count, msg, iters, want);
+    if (open_device(k, &c, iters, &ctx, err, sizeof err) != 0) {
+        failures++;
+        printf("  FAIL  %s %s: %s\n", k->name, what, err);
+        vb_corpus_free(&c);
+        return;
+    }
+
+    if (!pipelined) {
+        uint64_t got[VB_MAX_DIGEST_WORDS];
+        vb_dev_ctx_set_stream(&ctx, 1, pinned);
+        if (vb_dev_ctx_run(&ctx, iters, got) != 0) {
+            failures++;
+            printf("  FAIL  %s %s: %s\n", k->name, what, ctx.error);
+        } else if (memcmp(got, want, sizeof got) != 0) {
+            failures++;
+            printf("  FAIL  %s %s: checksum\n", k->name, what);
+        }
+    } else if (vb_dev_ctx_set_overlap(&ctx, chunks, pinned) != 0) {
+        failures++;
+        printf("  FAIL  %s %s: %s\n", k->name, what, ctx.error);
+    } else {
+        vb_dev_pipe_begin(&ctx, 1, iters);
+        for (int call = 0; call < 3; call++) {
+            uint64_t got[2][VB_MAX_DIGEST_WORDS], kn, tn;
+            if (vb_dev_pipe_next(&ctx, 1, 2, got, &kn, &tn) != 0) {
+                failures++;
+                printf("  FAIL  %s %s: %s\n", k->name, what, ctx.error);
+                break;
+            }
+            for (int p = 0; p < 2; p++) {
+                if (call || p)
+                    checks++;
+                if (memcmp(got[p], want, sizeof want) != 0) {
+                    failures++;
+                    printf("  FAIL  %s %s: call %d pass %d\n", k->name, what,
+                           call, p);
+                }
+            }
+        }
+        vb_dev_pipe_end(&ctx, 1);
+    }
+    vb_dev_ctx_free(&ctx);
+    vb_corpus_free(&c);
 }
 
 static void check_range(const vb_kernel *k, uint32_t start, uint64_t groups,
@@ -189,6 +279,14 @@ int main(void)
         check_range(k, 0, 2, 3, min_iter + 200);
         check_range(k, 0, 2, 3, 200 > min_iter ? 200 : min_iter);
         check_range(k, 41, 2, 4, 1000);
+
+        if (k->device) {
+            check_streaming(k, 0, 0, 1);
+            check_streaming(k, 0, 0, 0);
+            check_streaming(k, 1, 0, 1);
+            check_streaming(k, 1, 3, 1);
+            check_streaming(k, 1, 1000, 0);
+        }
 
         printf("  ok    %-16s (%s, %u lanes x %u streams)\n",
                k->name, alg->name, k->lanes, k->streams);

@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static void usage(FILE *f, const char *argv0)
@@ -589,9 +590,14 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--dump-device-code")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
             cfg.dump_dir = argv[++i];
-            if (access(cfg.dump_dir, W_OK | X_OK) != 0) {
-                fprintf(stderr, "valubench: --dump-device-code: cannot write "
-                                "to '%s'\n", cfg.dump_dir);
+            /* A directory, not merely something writable: an executable file
+               passes the access() test, and every dump then failed one by
+               one after the run had started. */
+            struct stat st;
+            if (stat(cfg.dump_dir, &st) != 0 || !S_ISDIR(st.st_mode) ||
+                access(cfg.dump_dir, W_OK | X_OK) != 0) {
+                fprintf(stderr, "valubench: --dump-device-code: '%s' is not a "
+                                "directory this can write to\n", cfg.dump_dir);
                 return VB_EXIT_USAGE;
             }
             device_only = device_only ? device_only : a;

@@ -250,7 +250,8 @@ LDLIBS   += -ldl
 # declared in include/vb_cuda.h, and nothing from a CUDA toolkit is needed to
 # build. Kernels compile at run time for the device present, so there is no
 # architecture list here to bake the build machine into a result.
-CUDA_OBJS := $(BUILD)/cuda_loader.o $(BUILD)/cuda_backend.o
+CUDA_OBJS := $(BUILD)/cuda_loader.o $(BUILD)/cuda_backend.o \
+             $(BUILD)/cuda_ptx_import.o
 
 # What every device backend shares: the steer table now, and the device layer
 # the backends plug into.
@@ -276,7 +277,7 @@ HDRS := include/hashes.h include/sha512_const.h \
         include/bench.h include/sysinfo.h include/report.h \
         include/cpu_features.h include/vb_cl.h include/opencl.h \
         include/power.h include/device_steer.h include/device.h \
-        include/vb_cuda.h include/cuda_loader.h
+        include/vb_cuda.h include/cuda_loader.h include/cuda_ptx.h
 # Every kernel translation unit depends on the whole template set and on the
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
@@ -288,7 +289,8 @@ KHDRS := $(wildcard src/kernels/cpu/*.h)
 # in zero seconds and the next step died on a binary that was never linked.
 .DEFAULT_GOAL := all
 
-.PHONY: all test check check-kernels check-nvrtc clean config need-python3
+.PHONY: all test check check-kernels check-nvrtc check-device-layer clean \
+        config need-python3
 
 # Three checks read the binary's JSON with python3. Without it they used to
 # fail as if the binary were at fault -- check-pinning reported "no pinned_cpus
@@ -470,6 +472,16 @@ $(BUILD)/test_power_model: tests/test_power_model.c $(BUILD)/power.o
 check-power: $(BUILD)/test_power_model
 	@$(BUILD)/test_power_model
 
+# The device layer's pure parts -- chunk slicing, the chunk count overlap
+# chooses, the PTX translation behind --import-ptx -- which need no device and
+# so are the only device code CI can check. Links the core like test_kernels.
+$(BUILD)/test_device_layer: tests/test_device_layer.c $(CORE_OBJS) $(HDRS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_device_layer.c $(CORE_OBJS) \
+	      $(LDLIBS)
+
+check-device-layer: $(BUILD)/test_device_layer
+	@$(BUILD)/test_device_layer
+
 check-report: $(BUILD)/test_report_json
 	@$(BUILD)/test_report_json
 
@@ -579,7 +591,7 @@ check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
-       check-power \
+       check-power check-device-layer \
        check-pinning \
        check-virt \
        check-config \

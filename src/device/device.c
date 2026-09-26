@@ -533,15 +533,16 @@ int vb_dev_ctx_collect(vb_dev_ctx *c, uint64_t checksum[VB_MAX_DIGEST_WORDS])
  * pipeline. But one chunk means two buffers each a whole pass long, so a
  * working set too large for that is split until the pair fits.
  */
-static unsigned auto_chunks(const vb_dev_ctx *c)
+unsigned vb_dev_auto_chunks(uint64_t n_groups, uint64_t group_bytes,
+                            uint64_t global_mem)
 {
-    uint64_t budget = c->dev.global_mem / VB_PIPE_MEM_SHARE;
+    uint64_t budget = global_mem / VB_PIPE_MEM_SHARE;
     unsigned chunks = 1;
 
-    while (budget && chunks < c->n_groups && chunks < 256) {
+    while (budget && chunks < n_groups && chunks < 256) {
         uint64_t first, largest;
-        vb_dev_slice(c->n_groups, (int) chunks, 0, &first, &largest);
-        if (2 * largest * c->group_bytes <= budget)
+        vb_dev_slice(n_groups, (int) chunks, 0, &first, &largest);
+        if (2 * largest * group_bytes <= budget)
             break;
         chunks++;
     }
@@ -555,7 +556,8 @@ int vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned)
         return -1;
     }
     if (chunks == 0)
-        chunks = auto_chunks(c);
+        chunks = vb_dev_auto_chunks(c->n_groups, c->group_bytes,
+                                    c->dev.global_mem);
     /* A chunk is whole groups, so a slice of one group is one chunk; the
        pipeline still overlaps it with the next pass's upload. */
     if (chunks > c->n_groups)

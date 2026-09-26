@@ -159,6 +159,7 @@ expect_exit 2 "geometry, zero"        "$BIN" --device-geometry 0,64
 expect_exit 2 "geometry, not numbers" "$BIN" --device-geometry a,b
 expect_exit 2 "geometry, negative"    "$BIN" --device-geometry -4096,64
 expect_exit 2 "dump dir missing"      "$BIN" --dump-device-code /nonexistent/valubench
+expect_exit 2 "dump dir is a file"    "$BIN" --dump-device-code "$BIN"
 # A device-only option on a run that can only pick a CPU kernel would do
 # nothing at all -- an empty dump directory, a geometry never used.
 expect_exit 2 "geometry with --where cpu" \
