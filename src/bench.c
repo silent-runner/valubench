@@ -716,12 +716,11 @@ static uint64_t calibrate_reps(vb_pool *p, unsigned target_ms)
  * property here (work-items), not a host one, so `threads` is reported as 1.
  */
 /*
- * `passes` passes through every device's pipeline, each checked against the
- * single-pass checksum. 0; 1 if a pass computed something else, which lands
- * in `bad`; -1 if the pipeline could not run.
+ * The next `passes` passes through every device's running pipeline, each
+ * checked against the single-pass checksum. 0; 1 if a pass computed something
+ * else, which lands in `bad`; -1 if the pipeline could not run.
  */
-static int pipe_passes(vb_dev_ctx *ctx, int n, const vb_config *cfg,
-                       uint64_t passes,
+static int pipe_passes(vb_dev_ctx *ctx, int n, uint64_t passes,
                        const uint64_t expected[VB_MAX_DIGEST_WORDS],
                        uint64_t bad[VB_MAX_DIGEST_WORDS],
                        uint64_t *kernel_ns, uint64_t *transfer_ns)
@@ -734,8 +733,7 @@ static int pipe_passes(vb_dev_ctx *ctx, int n, const vb_config *cfg,
         return -1;
     }
     int rc = 0;
-    if (vb_dev_pipe_run(ctx, n, cfg->iterations, passes, got, kernel_ns,
-                        transfer_ns) != 0) {
+    if (vb_dev_pipe_next(ctx, n, passes, got, kernel_ns, transfer_ns) != 0) {
         rc = -1;
         /* The context that failed has the reason; surface it on the first,
            which is where the caller looks. */
@@ -973,22 +971,29 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     uint64_t reps = 1;
 
     /*
-     * Pipelined, a rep is a pass through the pipeline and a run of them is
-     * one continuous stream, so it is timed and checked as a whole: every
-     * pass must match, and a wrong one is a wrong answer like any other.
+     * Pipelined, a rep is a pass through the pipeline, and everything from
+     * here to the last timed sample -- calibration, warm-up, the samples -- is
+     * one continuous stream. Each timed sample is a run of passes cut from it
+     * at pass completions, so none contains the pipeline filling or draining:
+     * starting every sample empty cost a fixed stretch per sample, a few
+     * percent of a default-length one where compute binds. Every pass is
+     * still checked, and a wrong one is a wrong answer like any other.
      */
     const int pipelined = cfg->transfer == VB_TRANSFER_OVERLAP;
     uint64_t pk = 0, pt = 0;
     #define VB_DEV_PIPE(count)                                             \
         do {                                                               \
-            int prc_ = pipe_passes(ctx, n_use, cfg, (count), expected_all, \
-                                   got, &pk, &pt);                         \
+            int prc_ = pipe_passes(ctx, n_use, (count), expected_all, got, \
+                                   &pk, &pt);                              \
             if (prc_ != 0) {                                               \
                 if (prc_ > 0)                                              \
                     memcpy(out->checksum, got, sizeof got);                \
                 goto fail_run;                                             \
             }                                                              \
         } while (0)
+
+    if (pipelined)
+        vb_dev_pipe_begin(ctx, n_use, cfg->iterations);
 
     for (;;) {
         uint64_t t0 = vb_now_ns();
@@ -1028,7 +1033,10 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
         }
     }
 
-    /* Re-calibrate post warm-up, for the same reason as the CPU path. */
+    /* Re-calibrate post warm-up, for the same reason as the CPU path.
+       Pipelined, the moment this returns is a pass completion, and it opens
+       the first timed sample. */
+    uint64_t t_mark;
     {
         uint64_t t0 = vb_now_ns();
         if (pipelined) {
@@ -1039,7 +1047,8 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
                 VB_DEV_PASS(fail_run);
             }
         }
-        uint64_t ns = vb_now_ns() - t0;
+        t_mark = vb_now_ns();
+        uint64_t ns = t_mark - t0;
         if (ns > 0) {
             double want = (double) reps * (target_ns / (double) ns);
             reps = (uint64_t) (want < 1.0 ? 1.0 : want);
@@ -1075,13 +1084,23 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
        between a boost figure and a sustained one. Warm-up is deliberately
        excluded -- the question is what the *measured* region ran at. */
     vb_gpu_clocks_reset(&out->gpu_clocks);
+    if (pipelined)
+        vb_gpu_clocks_sample(&out->gpu_clocks);
 
     for (unsigned si = 0; si < n_samples; si++) {
-        uint64_t t0 = vb_now_ns();
-        vb_gpu_clocks_sample(&out->gpu_clocks);
+        /*
+         * Pipelined, each sample starts where the last one ended. The device
+         * goes on hashing queued chunks while the host reads the clock and
+         * does its bookkeeping between samples, so that time belongs to the
+         * next sample -- restarting the timer here would credit the work done
+         * in it to no time at all.
+         */
+        uint64_t t0 = pipelined ? t_mark : vb_now_ns();
+        if (!pipelined)
+            vb_gpu_clocks_sample(&out->gpu_clocks);
         if (pipelined) {
-            int prc = pipe_passes(ctx, n_use, cfg, reps, expected_all, got,
-                                  &pk, &pt);
+            int prc = pipe_passes(ctx, n_use, reps, expected_all, got, &pk,
+                                  &pt);
             if (prc != 0) {
                 if (prc > 0) {
                     memcpy(out->checksum, got, sizeof got);
@@ -1114,7 +1133,8 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
             kernel_ns += slowest;
             transfer_ns += slowest_xfer;
         }
-        double sec = (double) (vb_now_ns() - t0) / 1e9;
+        t_mark = vb_now_ns();
+        double sec = (double) (t_mark - t0) / 1e9;
         vb_gpu_clocks_sample(&out->gpu_clocks);
         out->sample_hps[si] = (double) out->hashes_per_iter / sec;
         out->total_seconds += sec;
@@ -1122,6 +1142,8 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     }
 
     vb_power_end(&out->power, out->total_seconds);
+    if (pipelined)
+        vb_dev_pipe_end(ctx, n_use);
 
     if (out->total_seconds > 0.0) {
         out->device_busy = (double) kernel_ns / 1e9 / out->total_seconds;

@@ -725,12 +725,12 @@ pipeline hid, as `overlap_efficiency`:
 ```
 $ valubench --kernel md5/ocl-s1 --working-set-kb 262144 --message-bytes 64 \
       --iterations 32 --transfer overlap
-  221.21 MH/s   (median of 10 samples, 1 thread)
+  225.09 MH/s   (median of 10 samples, 1 thread)
   ...
-  kernel busy 71.2% of wall time
-  pipelined   4 chunks per pass; 97% of the shorter of hashing and uploading hidden
-  transfer    98.0% of wall, 28.82 GB/s host->device (255.9 MiB per pass, pinned)
-  bound by    TRANSFER  (compute/transfer = 0.73)
+  kernel busy 69.8% of wall time
+  pipelined   4 chunks per pass; 100% of the shorter of hashing and uploading hidden
+  transfer    100.0% of wall, 28.82 GB/s host->device (255.9 MiB per pass, pinned)
+  bound by    TRANSFER  (compute/transfer = 0.70)
 ```
 
 Sweep both modes over one ladder and graph hashes per second against
@@ -761,16 +761,16 @@ nothing on the link, so the smaller of the link rate and the resident rate is
 the better prediction. A card with power headroom should show little difference
 between the two.
 
-`--pipeline-chunks` sets how many pieces each pass goes up in (default 4). More
-chunks shorten the stretch of each timed sample that cannot overlap, and each
-one costs a launch: the default was within about 1% of the best count at every
-point measured there, and 16 cost several percent where compute binds.
+The pipeline runs as one stream for the whole measurement, and each timed
+sample is cut from it where a pass completes, so no sample pays for the
+pipeline filling or draining and the sample length does not move the result.
 
-**Use longer samples for overlap.** Each timed sample starts with the pipeline
-empty, so the first chunk's upload overlaps nothing, and a short sample pays
-for that in full. Where compute binds, the default 100 ms samples came in a few
-percent under what the pipeline sustains and `--time-ms 1000` within about 1%
-(same capture); where the link binds it barely matters.
+`--pipeline-chunks` sets how many pieces each pass goes up in (default 4).
+With two device buffers even one chunk overlaps, each pass uploading while the
+one before it hashes, and every extra chunk is another, smaller launch: where
+compute binds on the RTX PRO 2000, one chunk ran a few percent faster than
+four, and where the link binds they were the same. Fewer chunks cost device
+memory instead -- two buffers, each one chunk long.
 
 ### Break-even: does the accelerator beat the CPU you already own?
 

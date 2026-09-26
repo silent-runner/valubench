@@ -34,10 +34,10 @@ typedef enum {
     VB_TRANSFER_STREAM,
     /*
      * Streaming with the upload overlapped: each pass goes up in chunks on a
-     * second queue while earlier chunks hash, continuously across the passes
-     * of a timed sample. What a competent offload achieves, and so the
-     * sustained rate; STREAM, which uploads and then hashes, is the
-     * non-overlapped baseline beside it.
+     * second queue while earlier chunks hash, as one stream for the whole
+     * run, with the timed samples cut from it at pass completions. What a
+     * competent offload achieves, and so the sustained rate; STREAM, which
+     * uploads and then hashes, is the non-overlapped baseline beside it.
      */
     VB_TRANSFER_OVERLAP
 } vb_transfer_mode;

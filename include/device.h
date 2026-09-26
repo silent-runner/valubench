@@ -215,6 +215,12 @@ struct vb_dev_ctx {
        inside the timed region. */
     int         stream;
     unsigned    pipe_chunks;      /* > 0: pipelined, this many per pass */
+    /* A running pipeline: the next chunk to queue and the next to collect,
+       counted from vb_dev_pipe_begin. At most VB_PIPE_RING apart. */
+    int         pipe_running;
+    uint32_t    pipe_iterations;
+    uint64_t    pipe_queued;
+    uint64_t    pipe_collected;
     size_t      group_bytes;      /* corpus bytes per group */
     int         host_pinned;      /* streaming reads pinned memory */
     const void *host_slice;       /* not owned; the corpus outlives this */
@@ -265,16 +271,28 @@ void vb_dev_ctx_set_stream(vb_dev_ctx *c, int on, int pinned);
 int  vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned);
 
 /*
- * Run `passes` passes on every context as one continuous pipeline per device,
- * all devices concurrently. out[p] receives the XOR of pass p's digests over
- * every device, so each pass can be checked against the single-pass
- * checksum; kernel_ns and transfer_ns the device time spent hashing and
- * uploading, the most of any device. 0, or -1 with the failing context's
- * error set.
+ * A pipeline that stays full between calls, one per device, all devices
+ * concurrently.
+ *
+ * vb_dev_pipe_begin starts it on every context. Each vb_dev_pipe_next then
+ * collects the next `passes` passes and returns as the last of them completes
+ * -- with the chunks after it already queued, so the device goes on hashing
+ * while the caller reads the clock. A run of calls is one continuous stream:
+ * the pipeline fills once, at the first call, and never drains between calls,
+ * so a timed sample cut at a return contains no fill and no drain. out[p]
+ * receives the XOR of that call's pass p over every device, so each pass can
+ * be checked against the single-pass checksum; kernel_ns and transfer_ns the
+ * device time spent hashing and uploading the chunks collected, the most of
+ * any device. 0, or -1 with the failing context's error set.
+ *
+ * vb_dev_pipe_end stops queueing and waits out what is in flight, discarding
+ * it. vb_dev_ctx_free does the same for a pipeline left running.
  */
-int  vb_dev_pipe_run(vb_dev_ctx *ctx, int n, uint32_t iterations,
-                     uint64_t passes, uint64_t (*out)[VB_MAX_DIGEST_WORDS],
-                     uint64_t *kernel_ns, uint64_t *transfer_ns);
+void vb_dev_pipe_begin(vb_dev_ctx *ctx, int n, uint32_t iterations);
+int  vb_dev_pipe_next(vb_dev_ctx *ctx, int n, uint64_t passes,
+                      uint64_t (*out)[VB_MAX_DIGEST_WORDS],
+                      uint64_t *kernel_ns, uint64_t *transfer_ns);
+void vb_dev_pipe_end(vb_dev_ctx *ctx, int n);
 
 /* Launch once and fold the partials. The split lets several devices run
    concurrently: enqueue on every device, then collect from each. */

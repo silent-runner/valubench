@@ -55,8 +55,11 @@ outside this repository while a durable format for them is decided.
   hashing.** Streaming uploaded each pass and then hashed it, so the link and
   the device took turns. Overlap uploads each pass in chunks on a second queue
   or stream (`--pipeline-chunks`, default 4) into alternating device buffers
-  while earlier chunks hash, continuously across passes, with the partials
-  read back asynchronously into pinned memory; every pass is still verified.
+  while earlier chunks hash, with the partials read back asynchronously into
+  pinned memory; every pass is still verified. The pipeline runs as one stream
+  for the whole measurement and each timed sample is cut from it at pass
+  completions, so no sample contains the pipeline filling or draining --
+  starting each sample empty had cost a few percent where compute binds.
   The result reports `overlap_efficiency` -- how much of the shorter of
   hashing and uploading the pipeline hid -- beside the per-pass kernel and
   transfer times. Both backends, through the shared device layer; `sweep.py`
