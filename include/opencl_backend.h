@@ -27,6 +27,7 @@ typedef struct {
     cl_event         xfer_event;  /* in-flight upload, streaming mode only */
 
     unsigned  lanes;        /* corpus interleave width */
+    char      steers[128];  /* the primitive steers compiled in, or "" */
     /* Digest shape of the work-group partial: 4x4 md5, 5x4 sha1, 8x8 sha512.
        Sizes the readback, the work-group scratch and the final fold. */
     unsigned  partial_words;

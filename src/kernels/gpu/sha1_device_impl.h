@@ -1,36 +1,34 @@
 /*
- * sha1.cl -- the OpenCL SHA-1 kernel.
+ * sha1_device_impl.h -- the SHA-1 device kernel, in no particular dialect.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
- * Same construction as md5.cl: a real .cl file embedded by tools/embed_cl.c,
- * with LANES and STREAMS arriving as -D so one source specialises into every
- * variant, and the constants and all 80 steps written out below from FIPS
- * 180-4. The work decomposition is identical to the CPU template, so the XOR
- * checksum matches it bit for bit.
+ * Same construction as md5_device_impl.h, which describes how a program is
+ * assembled: a dialect header, device_primitives.h, then this. LANES and
+ * STREAMS arrive as -D so one source specialises into every variant, and the
+ * constants and all 80 steps are written out below from FIPS 180-4. The work
+ * decomposition is identical to the CPU template, so the XOR checksum matches
+ * it bit for bit.
  *
  * The one structural difference from MD5 is the message schedule, and it costs
- * registers. MD5 permutes sixteen message words, so md5.cl can leave them in
- * global memory and read each one as the step needs it. SHA-1 *expands* sixteen
- * words into eighty, so the rolling window has to be materialised: sixteen live
- * uints per stream, on top of the five state words. At STREAMS=4 that is 84
- * private words per work-item, which on most devices spills or costs occupancy.
+ * registers. MD5 permutes sixteen message words, so md5_device_impl.h can
+ * leave them in global memory and read each one as the step needs it. SHA-1
+ * *expands* sixteen words into eighty, so the rolling window has to be
+ * materialised: sixteen live words per stream, on top of the five state words.
+ * At STREAMS=4 that is 84 private words per work-item, which on most devices
+ * spills or costs occupancy.
  *
  * That is a real property of the algorithm on this hardware, not something to
  * engineer around -- it is why the harness sweeps the stream count and picks by
  * measurement instead of assuming more streams is better.
  */
 
-#define ROTL(x, n) rotate((uint)(x), (uint)(n))
-
-/* bitselect(a,b,c) picks b where c has 1 bits, a where 0 -- one instruction on
-   AMD (BFI_INT) and NVIDIA (LOP3.LUT). Ch is immediate; Maj follows from
-   bitselect(x, y, x^z), which yields x where x==z and y otherwise -- exactly
-   the majority of the three. */
-#define S1CH(x, y, z)  bitselect((z), (y), (x))
+/* Ch and Maj are primitives, spelled per target in device_primitives.h;
+   parity is left plain for the compiler to fuse. */
+#define S1CH(x, y, z)  VB_CH32((x), (y), (z))
 #define S1PAR(x, y, z) ((x) ^ (y) ^ (z))
-#define S1MAJ(x, y, z) bitselect((x), (y), (x) ^ (z))
+#define S1MAJ(x, y, z) VB_MAJ32((x), (y), (z))
 
 /*
  * In-place round. The five state variables are renamed rather than moved, so
@@ -38,18 +36,18 @@
  * copies are emitted. `b` is rotated in place because the next step reads it as
  * its `c`.
  */
-#define STEP(f, a, b, c, d, e, k, t, KC)                    \
-    e[k] += ROTL(a[k], 5) + f(b[k], c[k], d[k]) + KC        \
-          + w[k][(t) & 15];                                 \
-    b[k] = ROTL(b[k], 30);
+#define STEP(f, a, b, c, d, e, k, t, KC)                        \
+    e[k] += VB_ROTL32(a[k], 5) + f(b[k], c[k], d[k]) + KC       \
+          + w[k][(t) & 15];                                     \
+    b[k] = VB_ROTL32(b[k], 30);
 
 /* W[t] = ROTL1(W[t-3] ^ W[t-8] ^ W[t-14] ^ W[t-16]), the indices reduced into
    the sixteen-entry rolling window so the update is in place. */
-#define EXP1(k, t)                                          \
-    w[k][(t) & 15] = ROTL(w[k][((t) -  3) & 15] ^           \
-                          w[k][((t) -  8) & 15] ^           \
-                          w[k][((t) - 14) & 15] ^           \
-                          w[k][((t) - 16) & 15], 1);
+#define EXP1(k, t)                                              \
+    w[k][(t) & 15] = VB_ROTL32(w[k][((t) -  3) & 15] ^          \
+                               w[k][((t) -  8) & 15] ^          \
+                               w[k][((t) - 14) & 15] ^          \
+                               w[k][((t) - 16) & 15], 1);
 
 /* Streams are expanded by macro, never by a loop -- if a loop failed to unroll
    the kernel would collapse to one dependency chain and silently under-report
@@ -91,42 +89,43 @@
  * validates every device kernel against the scalar reference, so the two cannot
  * drift apart unnoticed.
  */
-__constant uint K[4] = {
+VB_CONST_TABLE vb_u32 K[4] = {
     0x5a827999u, 0x6ed9eba1u, 0x8f1bbcdcu, 0xca62c1d6u,
 };
 
-__kernel
-void vb_sha1(__global const uint *corpus,
-             const uint blocks,
-             const uint iterations,
-             const ulong n_groups,
-             const uint repeats,
-             __global uint *partials,
-             __local uint *scratch)
+VB_KERNEL vb_sha1(VB_GLOBAL const vb_u32 *corpus,
+                  const vb_u32 blocks,
+                  const vb_u32 iterations,
+                  const vb_u64 n_groups,
+                  const vb_u32 repeats,
+                  VB_GLOBAL vb_u32 *partials
+                  VB_SCRATCH_PARAM(vb_u32, scratch))
 {
-    const size_t gid  = get_global_id(0);
-    const size_t lid  = get_local_id(0);
+    VB_SCRATCH_DECL(vb_u32, scratch)
+
+    const size_t gid  = VB_GLOBAL_ID();
+    const size_t lid  = VB_LOCAL_ID();
     const size_t lane = gid % LANES;
 
     const size_t slot_words  = (size_t)blocks * 16 * LANES;
     const size_t block_words = 16 * LANES;
 
-    const size_t g_stride = get_global_size(0) / LANES;
+    const size_t g_stride = VB_GLOBAL_SIZE() / LANES;
 
-    uint acc[DIGEST_WORDS];
+    vb_u32 acc[DIGEST_WORDS];
     for (int j = 0; j < DIGEST_WORDS; j++)
         acc[j] = 0;
 
     /* Sweep the corpus `repeats` times, always an odd count so XORing every
        pass leaves the single-pass checksum intact. See md5.cl. */
-    for (uint rep = 0; rep < repeats; rep++)
+    for (vb_u32 rep = 0; rep < repeats; rep++)
     for (size_t g = gid / LANES; g < n_groups; g += g_stride) {
-        __global const uint *slot[STREAMS];
-        __global const uint *wp[STREAMS];
-        uint w[STREAMS][16];
-        uint fb[STREAMS][DIGEST_WORDS];
-        uint h[STREAMS][DIGEST_WORDS];
-        uint A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS], E[STREAMS];
+        VB_GLOBAL const vb_u32 *slot[STREAMS];
+        VB_GLOBAL const vb_u32 *wp[STREAMS];
+        vb_u32 w[STREAMS][16];
+        vb_u32 fb[STREAMS][DIGEST_WORDS];
+        vb_u32 h[STREAMS][DIGEST_WORDS];
+        vb_u32 A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS], E[STREAMS];
 
         for (int k = 0; k < STREAMS; k++) {
             slot[k] = corpus + (g * STREAMS + k) * slot_words + lane;
@@ -137,14 +136,14 @@ void vb_sha1(__global const uint *corpus,
             fb[k][4] = slot[k][4 * LANES];
         }
 
-        for (uint it = 0; it < iterations; it++) {
+        for (vb_u32 it = 0; it < iterations; it++) {
             for (int k = 0; k < STREAMS; k++) {
                 h[k][0] = 0x67452301u; h[k][1] = 0xefcdab89u;
                 h[k][2] = 0x98badcfeu; h[k][3] = 0x10325476u;
                 h[k][4] = 0xc3d2e1f0u;
             }
 
-            for (uint b = 0; b < blocks; b++) {
+            for (vb_u32 b = 0; b < blocks; b++) {
                 for (int k = 0; k < STREAMS; k++) {
                     wp[k] = slot[k] + (size_t)b * block_words;
                     LOADW(k)
@@ -329,17 +328,17 @@ void vb_sha1(__global const uint *corpus,
        timed region and corrupt the PCIe measurement this exists to make. */
     for (int j = 0; j < DIGEST_WORDS; j++)
         scratch[lid * DIGEST_WORDS + j] = acc[j];
-    barrier(CLK_LOCAL_MEM_FENCE);
+    VB_BARRIER();
 
-    for (size_t s = get_local_size(0) / 2; s > 0; s >>= 1) {
+    for (size_t s = VB_LOCAL_SIZE() / 2; s > 0; s >>= 1) {
         if (lid < s)
             for (int j = 0; j < DIGEST_WORDS; j++)
                 scratch[lid * DIGEST_WORDS + j] ^=
                     scratch[(lid + s) * DIGEST_WORDS + j];
-        barrier(CLK_LOCAL_MEM_FENCE);
+        VB_BARRIER();
     }
 
     if (lid == 0)
         for (int j = 0; j < DIGEST_WORDS; j++)
-            partials[get_group_id(0) * DIGEST_WORDS + j] = scratch[j];
+            partials[VB_GROUP_ID() * DIGEST_WORDS + j] = scratch[j];
 }

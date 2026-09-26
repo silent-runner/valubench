@@ -246,6 +246,11 @@ endif
 OCL_OBJS := $(BUILD)/ocl_loader.o $(BUILD)/ocl_backend.o
 LDLIBS   += -ldl
 
+# What every device backend shares: the steer table now, and the device layer
+# the backends plug into.
+DEV_OBJS := $(patsubst src/device/%.c,$(BUILD)/device_%.o,\
+                       $(wildcard src/device/*.c))
+
 # The scalar reference implementations -- the correctness oracles every kernel
 # is validated against. Discovered rather than listed: one per algorithm in
 # src/reference/, so adding an algorithm does not also mean remembering to edit
@@ -257,13 +262,14 @@ REF_OBJS := $(patsubst src/reference/%.c,$(BUILD)/ref_%.o,\
 CORE_OBJS := $(REF_OBJS) \
              $(BUILD)/algorithm.o $(BUILD)/workload.o $(BUILD)/cpu_features.o \
              $(BUILD)/bench.o $(BUILD)/sysinfo.o $(BUILD)/report.o \
-             $(BUILD)/registry.o $(BUILD)/power.o $(KERNEL_OBJS) $(OCL_OBJS)
+             $(BUILD)/registry.o $(BUILD)/power.o $(KERNEL_OBJS) $(OCL_OBJS) \
+             $(DEV_OBJS)
 
 HDRS := include/hashes.h include/sha512_const.h \
         include/algorithm.h include/valubench.h \
         include/bench.h include/sysinfo.h include/report.h \
         include/cpu_features.h include/vb_cl.h include/opencl.h \
-        include/opencl_backend.h include/power.h
+        include/opencl_backend.h include/power.h include/device_steer.h
 # Every kernel translation unit depends on the whole template set and on the
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
@@ -307,24 +313,29 @@ config:
 #
 # Constant tables are transcribed from their specifications and checked by the
 # known-answer vectors, so there is nothing to generate for them. The only
-# generated artifact is the embedded OpenCL kernel below.
+# generated artifacts are the embedded device kernel sources below.
 
-# The OpenCL kernels are real .cl files carrying their own constants and round
-# schedules, so embedding one is a single step: embed_cl turns the file into a
-# byte array the binary compiles in, and nothing has to be installed or located
-# at run time.
+# The device kernels are real source files carrying their own constants and
+# round schedules, so embedding one is a single step: embed_cl turns the file
+# into a byte array the binary compiles in, and nothing has to be installed or
+# located at run time.
 #
 # Generated into $(BUILD), not committed. The output is a pure function of the
-# .cl file and embed_cl needs nothing but the C compiler the build already
+# source file and embed_cl needs nothing but the C compiler the build already
 # requires, so a checked-in copy could only be a second source of truth to keep
 # in sync -- which it did not: a `check-embed` target existed solely to catch
 # drift, and the headers were once found truncated in a working tree with a
 # green build behind them.
 #
-# Adding a device kernel is adding a .cl file. The symbol and include guard are
-# derived from its name.
-CL_SOURCES := $(wildcard src/kernels/gpu/*.cl)
-CL_HEADERS := $(patsubst src/kernels/gpu/%.cl,$(BUILD)/%_kernel.h,$(CL_SOURCES))
+# Every file under src/kernels/gpu is embedded on its own -- the two dialect
+# headers, device_primitives.h and one algorithm core per hash -- and the device
+# backends compose a program from them at run time: dialect, primitives, core.
+# Adding a device algorithm is adding its core, plus a line in the kernel
+# matrix; the symbol and include guard are derived from the file name, and
+# device_sources.h collects every one of them.
+DEV_SOURCES := $(wildcard src/kernels/gpu/*.h)
+CL_HEADERS  := $(patsubst src/kernels/gpu/%.h,$(BUILD)/dev_%.h,$(DEV_SOURCES)) \
+               $(BUILD)/device_sources.h
 
 $(BUILD)/embed_cl: tools/embed_cl.c
 	$(HOSTCC) -O2 -std=c11 -Iinclude -o $@ $<
@@ -336,9 +347,16 @@ CL_UC = $(shell echo $(1) | tr a-z A-Z)
 # kernel misbehaves.
 .SECONDARY: $(CL_HEADERS)
 
-$(BUILD)/%_kernel.h: src/kernels/gpu/%.cl $(BUILD)/embed_cl
-	$(BUILD)/embed_cl VB_OCL_$(call CL_UC,$*)_SOURCE \
-	    VALUBENCH_OPENCL_$(call CL_UC,$*)_KERNEL_H < $< > $@
+$(BUILD)/dev_%.h: src/kernels/gpu/%.h $(BUILD)/embed_cl
+	$(BUILD)/embed_cl VB_DEV_$(call CL_UC,$*) \
+	    VALUBENCH_DEV_$(call CL_UC,$*)_H $*.h < $< > $@
+
+# Written through a temporary and renamed, so an interrupted build cannot
+# leave a truncated header behind for the next one to trust.
+$(BUILD)/device_sources.h: $(filter-out $(BUILD)/device_sources.h,$(CL_HEADERS))
+	@{ echo '/* GENERATED: every embedded device source. */'; \
+	   for h in $(notdir $^); do echo "#include \"$$h\""; done; } > $@.tmp
+	@mv $@.tmp $@
 
 # ---- objects ------------------------------------------------------------
 
@@ -360,6 +378,9 @@ $(BUILD)/sve_lanes.o: src/kernels/cpu/sve_lanes.c $(HDRS)
 # list, and without the ISA defines the matrix would mean something different in
 # this translation unit than in every other one.
 $(BUILD)/ocl_%.o: src/opencl/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
+	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
+
+$(BUILD)/device_%.o: src/device/%.c $(CL_HEADERS) $(HDRS) $(KHDRS)
 	$(CC) $(CFLAGS) $(KERNEL_DEFS) -c -o $@ $<
 
 $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)

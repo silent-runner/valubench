@@ -24,10 +24,9 @@
 #define _GNU_SOURCE
 
 #include "opencl_backend.h"
+#include "device_steer.h"
 #include "kernels/cpu/matrix.h"
-#include "md5_kernel.h"
-#include "sha1_kernel.h"
-#include "sha512_kernel.h"
+#include "device_sources.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,11 +47,11 @@
 typedef struct {
     vb_alg_id   alg;
     const char *entry;
-    const char *source;             /* complete, generated at build time */
+    const char *source;             /* the algorithm core, embedded */
 } vb_ocl_program;
 
 #define VB_DEV_PROGRAM(alg, ALG, algid, entry) \
-    { algid, entry, VB_OCL_##ALG##_SOURCE },
+    { algid, entry, VB_DEV_##ALG##_DEVICE_IMPL },
 
 static const vb_ocl_program PROGRAMS[] = {
     VB_FOR_EACH_DEVICE_ALG(VB_DEV_PROGRAM)
@@ -367,16 +366,29 @@ int vb_ocl_ctx_init(vb_ocl_ctx *c, const vb_ocl_device *dev,
 
     /* ---- program ---- */
 
-    const char *srcs[1] = { prog->source };
-    c->program = cl->CreateProgramWithSource(c->context, 1, srcs, NULL, &err);
+    /* Dialect, primitives, core: the same composition every backend builds,
+       so the core is the same text whichever API compiles it. */
+    const char *srcs[3] = { VB_DEV_DIALECT_OPENCL, VB_DEV_DEVICE_PRIMITIVES,
+                            prog->source };
+    c->program = cl->CreateProgramWithSource(c->context, 3, srcs, NULL, &err);
     if (!c->program) {
         set_err(c, "clCreateProgramWithSource: %s", vb_ocl_strerror(err));
         goto fail;
     }
 
-    char opts[128];
-    snprintf(opts, sizeof opts, "-DLANES=%u -DSTREAMS=%u -cl-std=CL1.2",
-             c->lanes, streams);
+    /* Steers by the device's vendor, never by the API: see
+       src/kernels/gpu/device_primitives.h. */
+    char steer_defs[256];
+    if (vb_device_steers(vb_vendor_classify(c->dev.vendor, 0),
+                         VB_DIALECT_OPENCL, 0, steer_defs, sizeof steer_defs,
+                         c->steers, sizeof c->steers) != 0) {
+        set_err(c, "%s", c->steers);
+        goto fail;
+    }
+
+    char opts[384];
+    snprintf(opts, sizeof opts, "-DLANES=%u -DSTREAMS=%u -cl-std=CL1.2 %s",
+             c->lanes, streams, steer_defs);
 
     err = cl->BuildProgram(c->program, 1, &c->dev.device, opts, NULL, NULL);
     if (err != CL_SUCCESS) {

@@ -180,8 +180,9 @@
  *
  *   M(alg, ALG, algorithm_id, entry_point)
  *
- * ALG is the same token uppercased, because the embedded source symbol is
- * VB_OCL_<ALG>_SOURCE and the preprocessor cannot change case.
+ * ALG is the same token uppercased, because the embedded core's symbol is
+ * VB_DEV_<ALG>_DEVICE_IMPL, from src/kernels/gpu/<alg>_device_impl.h, and the
+ * preprocessor cannot change case.
  */
 #define VB_OCL_LANES 64
 

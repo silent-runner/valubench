@@ -21,7 +21,9 @@ why they are worth stating before any change:
   unroll would collapse four dependency chains into one and under-report the
   hardware several-fold, silently.
 - **Round functions are per ISA.** An optimization that helps AVX2 can be
-  pointless or harmful on AVX-512.
+  pointless or harmful on AVX-512. Device kernels invert this on purpose:
+  primitives are steered per *vendor* and never per API, so CUDA and OpenCL on
+  one card compile identical text (`src/kernels/gpu/device_primitives.h`).
 - **`src/registry.c` is generated from the matrix** and never hand-edited.
 
 ## Measured numbers are tracked outside this repository

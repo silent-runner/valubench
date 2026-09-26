@@ -1,19 +1,20 @@
 /*
- * sha512.cl -- the OpenCL SHA-512 kernel.
+ * sha512_device_impl.h -- the SHA-512 device kernel, in no particular dialect.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
- * Same construction as md5.cl and sha1.cl -- a real .cl file embedded by
- * tools/embed_cl.c, LANES and STREAMS arriving as -D, and the constant tables
- * and all 80 steps written out below from FIPS 180-4. The work decomposition is
- * identical to the CPU template, so the XOR checksum matches it bit for bit.
+ * Same construction as md5_device_impl.h and sha1_device_impl.h -- assembled
+ * after a dialect header and device_primitives.h, LANES and STREAMS arriving
+ * as -D, and the constant tables and all 80 steps written out below from FIPS
+ * 180-4. The work decomposition is identical to the CPU template, so the XOR
+ * checksum matches it bit for bit.
  *
  * This is the one that stresses the device rather than the harness, in two
  * ways that are worth stating before the code.
  *
- * SIXTY-FOUR-BIT INTEGER ARITHMETIC. Every operation here is on `ulong`. That is
- * core OpenCL and always compiles, but on most consumer GPUs the hardware ALUs
+ * SIXTY-FOUR-BIT INTEGER ARITHMETIC. Every operation here is on 64-bit words. That
+ * is core in both dialects and always compiles, but on most consumer GPUs the hardware ALUs
  * are 32-bit and the compiler emulates 64-bit work: an add becomes an add plus a
  * carry, and a 64-bit rotate becomes a funnel shift built from several 32-bit
  * ops. Whatever this kernel measures is therefore as much a statement about the
@@ -32,15 +33,14 @@
  * than assuming, so where the cliff lands is a result, not a problem.
  */
 
-/* OpenCL's rotate() goes left, so a right rotate is a left rotate by the
-   complement. `n` is always a literal here, so this folds. */
-#define ROTR(x, n) rotate((ulong)(x), (ulong)(64 - (n)))
+/* Every rotate in FIPS 180-4's SHA-512 is to the right, and `n` is always a
+   literal. How it becomes instructions is device_primitives.h's business --
+   on 32-bit device ALUs it is the operation that matters most here. */
+#define ROTR(x, n) VB_ROTR64((x), (n))
 
-/* bitselect(a,b,c) picks b where c has 1 bits, a where 0. Ch is immediate; Maj
-   follows from bitselect(x, y, x^z), which yields x where x==z and y otherwise
-   -- exactly the majority of the three. */
-#define S5CH(x, y, z)  bitselect((z), (y), (x))
-#define S5MAJ(x, y, z) bitselect((x), (y), (x) ^ (z))
+/* Ch and Maj, spelled per target in device_primitives.h. */
+#define S5CH(x, y, z)  VB_CH64((x), (y), (z))
+#define S5MAJ(x, y, z) VB_MAJ64((x), (y), (z))
 
 /* FIPS 180-4 section 4.1.3. */
 #define BSIG0(x) (ROTR(x, 28) ^ ROTR(x, 34) ^ ROTR(x, 39))
@@ -56,9 +56,9 @@
  */
 #define STEP(k, a, b, c, d, e, f, g, h, t, KC)                  \
     {                                                           \
-        ulong t1 = h[k] + BSIG1(e[k]) + S5CH(e[k], f[k], g[k])  \
+        vb_u64 t1 = h[k] + BSIG1(e[k]) + S5CH(e[k], f[k], g[k]) \
                  + KC + w[k][(t) & 15];                         \
-        ulong t2 = BSIG0(a[k]) + S5MAJ(a[k], b[k], c[k]);       \
+        vb_u64 t2 = BSIG0(a[k]) + S5MAJ(a[k], b[k], c[k]);      \
         d[k] += t1;                                             \
         h[k] = t1 + t2;                                         \
     }
@@ -114,7 +114,7 @@
  * every device kernel against the scalar reference, so the two cannot drift
  * apart unnoticed.
  */
-__constant ulong K[80] = {
+VB_CONST_TABLE vb_u64 K[80] = {
     0x428a2f98d728ae22UL, 0x7137449123ef65cdUL, 0xb5c0fbcfec4d3b2fUL, 0xe9b5dba58189dbbcUL,
     0x3956c25bf348b538UL, 0x59f111f1b605d019UL, 0x923f82a4af194f9bUL, 0xab1c5ed5da6d8118UL,
     0xd807aa98a3030242UL, 0x12835b0145706fbeUL, 0x243185be4ee4b28cUL, 0x550c7dc3d5ffb4e2UL,
@@ -136,22 +136,23 @@ __constant ulong K[80] = {
     0x28db77f523047d84UL, 0x32caab7b40c72493UL, 0x3c9ebe0a15c9bebcUL, 0x431d67c49c100d4cUL,
     0x4cc5d4becb3e42b6UL, 0x597f299cfc657e2aUL, 0x5fcb6fab3ad6faecUL, 0x6c44198c4a475817UL,
 };
-__constant ulong IV[8] = {
+VB_CONST_TABLE vb_u64 IV[8] = {
     0x6a09e667f3bcc908UL, 0xbb67ae8584caa73bUL, 0x3c6ef372fe94f82bUL, 0xa54ff53a5f1d36f1UL,
     0x510e527fade682d1UL, 0x9b05688c2b3e6c1fUL, 0x1f83d9abfb41bd6bUL, 0x5be0cd19137e2179UL,
 };
 
-__kernel
-void vb_sha512(__global const ulong *corpus,
-               const uint blocks,
-               const uint iterations,
-               const ulong n_groups,
-               const uint repeats,
-               __global ulong *partials,
-               __local ulong *scratch)
+VB_KERNEL vb_sha512(VB_GLOBAL const vb_u64 *corpus,
+                    const vb_u32 blocks,
+                    const vb_u32 iterations,
+                    const vb_u64 n_groups,
+                    const vb_u32 repeats,
+                    VB_GLOBAL vb_u64 *partials
+                    VB_SCRATCH_PARAM(vb_u64, scratch))
 {
-    const size_t gid  = get_global_id(0);
-    const size_t lid  = get_local_id(0);
+    VB_SCRATCH_DECL(vb_u64, scratch)
+
+    const size_t gid  = VB_GLOBAL_ID();
+    const size_t lid  = VB_LOCAL_ID();
     const size_t lane = gid % LANES;
 
     /* Sixteen words per block holds whatever the word width -- SHA-512's block
@@ -159,23 +160,23 @@ void vb_sha512(__global const ulong *corpus,
     const size_t slot_words  = (size_t)blocks * 16 * LANES;
     const size_t block_words = 16 * LANES;
 
-    const size_t g_stride = get_global_size(0) / LANES;
+    const size_t g_stride = VB_GLOBAL_SIZE() / LANES;
 
-    ulong acc[DIGEST_WORDS];
+    vb_u64 acc[DIGEST_WORDS];
     for (int j = 0; j < DIGEST_WORDS; j++)
         acc[j] = 0;
 
     /* Sweep the corpus `repeats` times, always an odd count so XORing every
        pass leaves the single-pass checksum intact. See md5.cl. */
-    for (uint rep = 0; rep < repeats; rep++)
+    for (vb_u32 rep = 0; rep < repeats; rep++)
     for (size_t g = gid / LANES; g < n_groups; g += g_stride) {
-        __global const ulong *slot[STREAMS];
-        __global const ulong *wp[STREAMS];
-        ulong w[STREAMS][16];
-        ulong fb[STREAMS][DIGEST_WORDS];
-        ulong h[STREAMS][DIGEST_WORDS];
-        ulong A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS];
-        ulong E[STREAMS], F[STREAMS], G[STREAMS], H[STREAMS];
+        VB_GLOBAL const vb_u64 *slot[STREAMS];
+        VB_GLOBAL const vb_u64 *wp[STREAMS];
+        vb_u64 w[STREAMS][16];
+        vb_u64 fb[STREAMS][DIGEST_WORDS];
+        vb_u64 h[STREAMS][DIGEST_WORDS];
+        vb_u64 A[STREAMS], B[STREAMS], C[STREAMS], D[STREAMS];
+        vb_u64 E[STREAMS], F[STREAMS], G[STREAMS], H[STREAMS];
 
         for (int k = 0; k < STREAMS; k++) {
             slot[k] = corpus + (g * STREAMS + k) * slot_words + lane;
@@ -183,7 +184,7 @@ void vb_sha512(__global const ulong *corpus,
                 fb[k][j] = slot[k][j * LANES];
         }
 
-        for (uint it = 0; it < iterations; it++) {
+        for (vb_u32 it = 0; it < iterations; it++) {
             for (int k = 0; k < STREAMS; k++) {
                 h[k][0] = IV[0]; h[k][1] = IV[1];
                 h[k][2] = IV[2]; h[k][3] = IV[3];
@@ -191,7 +192,7 @@ void vb_sha512(__global const ulong *corpus,
                 h[k][6] = IV[6]; h[k][7] = IV[7];
             }
 
-            for (uint b = 0; b < blocks; b++) {
+            for (vb_u32 b = 0; b < blocks; b++) {
                 for (int k = 0; k < STREAMS; k++) {
                     wp[k] = slot[k] + (size_t)b * block_words;
                     LOADW(k)
@@ -381,17 +382,17 @@ void vb_sha512(__global const ulong *corpus,
        timed region and corrupt the PCIe measurement this exists to make. */
     for (int j = 0; j < DIGEST_WORDS; j++)
         scratch[lid * DIGEST_WORDS + j] = acc[j];
-    barrier(CLK_LOCAL_MEM_FENCE);
+    VB_BARRIER();
 
-    for (size_t s = get_local_size(0) / 2; s > 0; s >>= 1) {
+    for (size_t s = VB_LOCAL_SIZE() / 2; s > 0; s >>= 1) {
         if (lid < s)
             for (int j = 0; j < DIGEST_WORDS; j++)
                 scratch[lid * DIGEST_WORDS + j] ^=
                     scratch[(lid + s) * DIGEST_WORDS + j];
-        barrier(CLK_LOCAL_MEM_FENCE);
+        VB_BARRIER();
     }
 
     if (lid == 0)
         for (int j = 0; j < DIGEST_WORDS; j++)
-            partials[get_group_id(0) * DIGEST_WORDS + j] = scratch[j];
+            partials[VB_GROUP_ID() * DIGEST_WORDS + j] = scratch[j];
 }
