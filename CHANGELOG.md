@@ -53,13 +53,13 @@ outside this repository while a durable format for them is decided.
 
 - **`--transfer overlap`: the sustained rate with uploads overlapping
   hashing.** Streaming uploaded each pass and then hashed it, so the link and
-  the device took turns. Overlap uploads each pass in chunks on a second queue
-  or stream into alternating device buffers (`--pipeline-chunks`; one per
-  pass by default, more only when two whole-pass buffers would take over a
-  quarter of device memory)
-  while earlier chunks hash, with the partials read back asynchronously into
-  pinned memory; every pass is still verified. The pipeline runs as one stream
-  for the whole measurement and each timed sample is cut from it at pass
+  the device took turns. Overlap uploads each pass on a second queue or stream
+  into alternating device buffers while the pass before it hashes, with the
+  partials read back asynchronously into pinned memory; every pass is still
+  verified. A pass goes up in one piece by default, or in several
+  (`--pipeline-chunks`) -- by default only when two whole-pass buffers would
+  take over a quarter of device memory. The pipeline runs as one stream for
+  the whole measurement and each timed sample is cut from it at pass
   completions, so no sample contains the pipeline filling or draining --
   starting each sample empty had cost a few percent where compute binds.
   The result reports `overlap_efficiency` -- how much of the shorter of
@@ -97,7 +97,9 @@ outside this repository while a durable format for them is decided.
   `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`,
   `steers` and `geometry_source`, in the JSON and as columns of the sweep CSV,
   which also gains the launch geometry -- `global_work`, `local_work`,
-  `sweeps_per_launch` -- that previously stopped at the JSON. `sweep.py` has
+  `sweeps_per_launch` -- and the GPU's clock range and throttle reasons --
+  `gpu_mhz_min`, `gpu_mhz_max`, `gpu_throttle` -- all of which previously
+  stopped at the JSON. `sweep.py` has
   `--primitives`, `--device-geometry` and `--compile-mode` axes (with
   `--import-ptx-dir` adding OpenCL's own code under CUDA as a fourth arm),
   and runs points that differ only in device API side by side, rotating the

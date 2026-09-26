@@ -177,8 +177,9 @@ are not comparable — so it drops into a script.
 
 ## GPUs
 
-OpenCL is `dlopen`'d at runtime — never linked — so the build needs no SDK and
-the same binary runs on a machine with no GPU, no driver, or no OpenCL at all.
+OpenCL, and CUDA with it (below), is `dlopen`'d at runtime — never linked — so
+the build needs no SDK and the same binary runs on a machine with no GPU, no
+driver, or no OpenCL at all.
 Build dependencies stay at a C compiler, libdl and libpthread.
 
 If `<CL/cl.h>` is installed (`opencl-headers`), the build uses it; otherwise it
@@ -196,6 +197,7 @@ $ ./build/valubench --list-devices
      memory    15888 MiB global, 3972 MiB max allocation
      pci       0000:01:00.0
      opencl    NVIDIA CUDA (OpenCL 3.0 CUDA 13.3.80), driver 610.57.04, max wg 1024
+     cuda      sm_120, CUDA 13.3, driver 610.57.04, max wg 1024
 ```
 
 Each device is listed once, with a line for every API that reaches it: a card
@@ -678,10 +680,11 @@ $ ./tools/sweep.py --algorithm md5 --kernel md5/ocl-s1 --transfer stream \
       --message-bytes 64 --working-set-kb 262144 --iterations 1:1024:*2
 ```
 
-The measured sweep walks from transfer-bound to
-compute-bound within the first few iterations, with the link rate flat
-throughout — which is the check that the link is being measured consistently
-rather than varying with the workload.
+The measured sweep walks from transfer-bound to compute-bound as the ladder
+climbs -- for MD5 at this size it takes tens of iterations on every discrete
+card measured so far -- with the link rate flat throughout, which is the check
+that the link is being measured consistently rather than varying with the
+workload.
 
 **The balance point is solved, not bracketed.** A geometric sweep only answers
 to within its own step. But transfer is constant in the iteration count and

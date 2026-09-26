@@ -167,7 +167,7 @@ VB_KERNEL vb_sha512(VB_GLOBAL const vb_u64 *corpus,
         acc[j] = 0;
 
     /* Sweep the corpus `repeats` times, always an odd count so XORing every
-       pass leaves the single-pass checksum intact. See md5.cl. */
+       pass leaves the single-pass checksum intact. See md5_device_impl.h. */
     for (vb_u32 rep = 0; rep < repeats; rep++)
     for (size_t g = gid / LANES; g < n_groups; g += g_stride) {
         VB_GLOBAL const vb_u64 *slot[STREAMS];

@@ -286,8 +286,8 @@ built with `$(HOSTCC)` rather than `$(CC)`.
 
 **Each constant table is written where it is used**, rather than shared from
 one header — MD5's in `src/reference/md5.c` and `src/kernels/cpu/md5_kernel_impl.h`,
-SHA-1's in `src/reference/sha1.c` and the two SHA-1 templates, and every device copy
-in its own `.cl` file. The exception is `include/sha512_const.h`: eighty 64-bit
+SHA-1's in `src/reference/sha1.c` and the two SHA-1 templates, and the device
+copy in each algorithm's `<alg>_device_impl.h`. The exception is `include/sha512_const.h`: eighty 64-bit
 round constants are large enough that a second copy would be a liability rather
 than a convenience.
 
@@ -297,21 +297,26 @@ unnoticed either. Every kernel is validated against the scalar reference by
 *reference* fails the RFC 1321 and FIPS 180-4 known-answer vectors in
 `tests/test_hashes.c`, which are independent of both.
 
-Adding a device algorithm is two things: the `.cl` file (the Makefile picks it
-up by wildcard) and one line in `VB_FOR_EACH_DEVICE_ALG` in `matrix.h`, naming
-its entry point and digest shape. The `PROGRAMS` table in `src/opencl/backend.c`
-and the four registry rows both expand from that line, so neither is written by
-hand. The digest shape is two numbers — words and bytes per word — because
+Adding a device algorithm is two things: its core, `../gpu/<alg>_device_impl.h`,
+written against the dialect and primitive macros so that every API compiles
+the same text (the Makefile embeds it by wildcard), and one line in
+`VB_FOR_EACH_DEVICE_ALG` in `matrix.h`, naming its entry point and digest
+shape. The `PROGRAMS` table in `src/device/device.c` and the eight registry
+rows -- one to four streams, on OpenCL and on CUDA -- both expand from that
+line, so neither is written by hand. The digest shape is two numbers — words and bytes per word — because
 SHA-512's partials are 64-bit; they size the readback, the work-group scratch
 and the fold, all of which are otherwise algorithm-agnostic.
 
 **Transfer mode.** By default the corpus is uploaded once at context setup and
 every launch runs against resident data. `--transfer stream` re-uploads before
 each launch so the host-to-device link sits inside the timed region, which is
-what the goal 2 crossover measurement needs. Enabling it forces `repeats` to 1:
-that knob amplifies compute without amplifying transfer, so any other value
-would inflate exactly the side of the ratio being measured. Geometry tuning
-always runs in resident mode, or it would be timing the upload.
+what the goal 2 crossover measurement needs. `--transfer overlap` streams too,
+but uploads on a second queue into two alternating device buffers while the
+pass before hashes, as one pipeline for the whole run with the timed samples
+cut from it at pass completions. Either forces `repeats` to 1: that knob
+amplifies compute without amplifying transfer, so any other value would inflate
+exactly the side of the ratio being measured. Geometry tuning always runs in
+resident mode, or it would be timing the upload.
 
 **One stream is usually the right answer on a device**, unlike on the CPU. A GPU
 already has thousands of work-items in flight, so interleaving hides no latency
@@ -319,8 +324,8 @@ that was not already hidden and only costs registers — `sha512/ocl` loses 2.1x
 between one stream and two. Kernels are still registered at 1-4 so the harness
 can measure it rather than assume it.
 
-**Review changes in the `.cl` file, not the header** — the header is machine
-output. It is a byte array rather than a string literal because C99 only
+**Review changes in the sources under `../gpu/`, not the headers `embed_cl`
+makes from them** — those are machine output. It is a byte array rather than a string literal because C99 only
 guarantees 4095-character string literals and the kernel exceeds that; an array
 initialiser has no such limit and stays warning-clean under `-Wpedantic`.
 
@@ -337,9 +342,12 @@ initialiser has no such limit and stays warning-clean under `-Wpedantic`.
 | `sve.c` | ARM SVE | VLA | Lane count chosen by the hardware, 128-2048 bits; resolved at startup |
 | `sve2.c` | ARM SVE2 | VLA | As SVE, plus three-input select, three-way XOR, xor-rotate and shift-right-insert |
 
-Device kernels live beside this directory in `../gpu/`: `md5.cl`, `sha1.cl`
-and `sha512.cl`. The host-side OpenCL driver that runs them -- context, upload,
-launch, readback -- is `src/opencl/`, and knows nothing about hash functions.
+Device kernels live beside this directory in `../gpu/`: one core per algorithm
+(`md5_device_impl.h`, `sha1_device_impl.h`, `sha512_device_impl.h`), the two
+dialect headers and `device_primitives.h`. The host side that runs them --
+context, upload, launch, readback -- is the shared device layer in
+`src/device/` with one backend per API in `src/opencl/` and `src/cuda/`, and
+knows nothing about hash functions.
 
 Planned: ARM's SHA-1 extension. It would need its own template: its
 instructions decompose the rounds differently from x86's, so
