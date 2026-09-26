@@ -58,6 +58,9 @@ class Capabilities:
         self.version = doc["benchmark"]["version"]
         self.algorithms = tuple(a["name"] for a in doc["algorithms"])
         self.transfer_modes = tuple(doc["transfer_modes"])
+        # Empty from a binary that predates pinned staging, which then gets no
+        # --host-memory flag at all rather than one it would reject.
+        self.host_memory_modes = tuple(doc.get("host_memory_modes", ()))
         # Autotune restrictions. Older binaries have no such notion, so this
         # degrades to "any" rather than failing.
         self.where_filters = tuple(doc.get("where_filters", ("any",)))
@@ -122,6 +125,7 @@ CSV_COLUMNS = [
     "working_set_bytes",
     "batch_messages",
     "transfer_mode",
+    "host_memory",
     # what ran
     "kernel",
     "isa",
@@ -260,11 +264,16 @@ def build_grid(args, caps):
     points, skipped = [], []
 
     axes = itertools.product(args.algorithm, args.kernel or [None], args.where,
-                             args.transfer, args.message_bytes,
-                             args.iterations, args.working_set_kb,
-                             args.threads)
+                             args.transfer, args.host_memory,
+                             args.message_bytes, args.iterations,
+                             args.working_set_kb, args.threads)
 
-    for alg, kern, where, xfer, mb, it, ws, th in axes:
+    for alg, kern, where, xfer, hm, mb, it, ws, th in axes:
+        # Host memory only changes what a streaming upload reads from, so on a
+        # resident point every value is the same measurement. Keep the first.
+        if xfer != "stream" and hm != args.host_memory[0]:
+            continue
+
         # A forced kernel only computes one algorithm; pairing it with the
         # others would be a guaranteed usage error on every such point.
         if kern and "/" in kern and kern.split("/")[0] != alg:
@@ -304,6 +313,7 @@ def build_grid(args, caps):
             "kernel": resolved,
             "where": where,
             "transfer": xfer,
+            "host_memory": hm,
             "message_bytes": mb,
             "iterations": it,
             "working_set_kb": ws,
@@ -331,10 +341,12 @@ def point_id(p):
     verbatim sidesteps both, and reads well enough in the CSV to be useful to a
     person scanning it.
     """
-    return ("alg=%s;kernel=%s;where=%s;transfer=%s;mb=%s;it=%s;ws=%s;thr=%s"
+    return ("alg=%s;kernel=%s;where=%s;transfer=%s;hm=%s;mb=%s;it=%s;ws=%s;"
+            "thr=%s"
             % (p["algorithm"], p["kernel"] or "auto", p.get("where", "any"),
-               p["transfer"], p["message_bytes"], p["iterations"],
-               p["working_set_kb"], p["threads"]))
+               p["transfer"], p.get("host_memory") or "-",
+               p["message_bytes"], p["iterations"], p["working_set_kb"],
+               p["threads"]))
 
 
 def load_completed(path):
@@ -426,6 +438,8 @@ def run_point(args, caps, point, refs=None):
                         point["working_set_kb"]), {}).get(point["iterations"])
         if got:
             cmd += ["--expect", got]
+    if point.get("host_memory") and caps.host_memory_modes:
+        cmd += ["--host-memory", point["host_memory"]]
     if point["kernel"]:
         cmd += ["--kernel", point["kernel"]]
     elif point.get("where", "any") != "any":
@@ -508,6 +522,9 @@ def _row_from_result(d, status, point=None):
         "working_set_bytes": p["working_set_bytes"],
         "batch_messages": p["batch_messages"],
         "transfer_mode": dev.get("transfer_mode", ""),
+        # What a streaming upload actually read from; blank when resident,
+        # where nothing crosses the link inside the timed region.
+        "host_memory": dev.get("host_memory", ""),
         "kernel": k["name"],
         "isa": k["isa"],
         "lanes": k["lanes"],
@@ -977,6 +994,10 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                          "the host-to-device upload inside the timed region; "
                          "sweep --iterations against it to find where compute "
                          "overtakes the link. No effect on CPU kernels.")
+    ap.add_argument("--host-memory", default="pinned", metavar="LIST",
+                    help="pinned, pageable -- what a streaming upload reads "
+                         "from. A list makes it an axis on streaming points; "
+                         "resident points ignore it.")
     ap.add_argument("--message-bytes", default="55", metavar="LIST")
     ap.add_argument("--iterations", default="1", metavar="LIST")
     ap.add_argument("--working-set-kb", default="1024", metavar="LIST")
@@ -1059,6 +1080,9 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
                                            caps.algorithms)
         args.transfer = parse_choice_list(args.transfer, "--transfer",
                                           caps.transfer_modes)
+        args.host_memory = parse_choice_list(
+            args.host_memory, "--host-memory",
+            caps.host_memory_modes or ("pinned",))
         args.where = parse_choice_list(args.where, "--where",
                                        caps.where_filters)
         args.kernel = (parse_choice_list(args.kernel, "--kernel", None)

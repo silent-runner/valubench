@@ -36,7 +36,7 @@ The version number moves when a field is removed or its meaning changes.
 | `result` | `unit`, `direction`, `median`, `min`, `max`, `mean`, `stddev`, `cov_percent`, `stable`, `cov_threshold_percent`, `message_bytes_per_second`, `compressions_per_second`, `samples`, `total_hashes`, `total_seconds` |
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
-| `device` | present only for device kernels: name, vendor, driver, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode the per-pass transfer figures |
+| `device` | present only for device kernels: name, vendor, driver, launch geometry, `kernel_busy_fraction`, `transfer_mode`, and in streaming mode `host_memory` and the per-pass transfer figures |
 | `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the joules/watts/`hashes_per_joule` figures with their `sources` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
@@ -102,8 +102,9 @@ did not match, whatever `--where` or `--kernel` restricted the candidates to.
 ## `valubench/capabilities/1`
 
 `--list --json` describes the binary and the machine: `benchmark`, `limits`,
-`defaults`, `exit_codes`, `transfer_modes`, `where_filters`, `algorithms`
-(each with digest and block geometry and its minimum iteration message length),
+`defaults`, `exit_codes`, `transfer_modes`, `host_memory_modes`,
+`where_filters`, `algorithms` (each with digest and block geometry and its
+minimum iteration message length),
 `kernels` (each with isa, lanes, streams, `where`, and `available` on this
 machine), and the `opencl` object.
 
@@ -145,7 +146,7 @@ to append to a file whose header differs rather than mixing two shapes.
 Three columns are worth knowing:
 
 **`point_id`** encodes what was *requested* — algorithm, kernel, where,
-transfer, message bytes, iterations, working set, threads. `--resume` matches on
+transfer, host memory, message bytes, iterations, working set, threads. `--resume` matches on
 it. It exists because requests cannot be recovered from results: `transfer_mode`
 comes back empty for CPU kernels whatever was asked for, and `kernel` comes back
 as autotune's choice where the request was "pick one".
@@ -156,7 +157,7 @@ onto the same corpus — which the sweep warns about, and which is why the
 requested value lives in `point_id` instead.
 
 **The device columns are empty on CPU rows**, not missing: `device`,
-`transfer_mode`, `kernel_busy_pct`, `transfer_busy_pct`,
+`transfer_mode`, `host_memory`, `kernel_busy_pct`, `transfer_busy_pct`,
 `transfer_gbytes_per_sec`, `compute_transfer_ratio` and `bound_by` all describe
 a host-to-device transfer, and a CPU kernel reads the corpus out of the memory
 it is already running in. The CSV always carries the columns so that CPU and

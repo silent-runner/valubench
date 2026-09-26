@@ -206,9 +206,10 @@ Known gaps, in the order they matter:
   width and instruction-set generation stay conflated on that side.
 - **AMD GPUs are untested.** NVIDIA and Intel are validated; ROCm and Mesa
   Rusticl have never run this.
-- **Every transfer figure is pageable memory.** An A10 on PCIe 4.0 x16 sustained
-  roughly half what pinned staging would achieve, which moves the crossover by
-  about that factor.
+- **Transfer figures in older captures are pageable memory.** Streaming now
+  uploads from pinned memory by default; captures taken before that read
+  pageable memory, which reached roughly half the link rate on an A10.
+  `--host-memory pageable` reproduces them.
 - **Overlapped transfer and compute.** Streaming uploads then launches, in
   order. The reported ratio already answers the pipelined question, so this
   concerns achieved throughput rather than correctness of the ratio.

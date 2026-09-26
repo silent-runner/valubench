@@ -63,7 +63,7 @@ if "$BIN" --list --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 need = ("schema", "benchmark", "algorithms", "kernels", "limits",
-        "exit_codes", "transfer_modes")
+        "exit_codes", "transfer_modes", "host_memory_modes")
 missing = [k for k in need if k not in d]
 if missing:
     print("  FAIL  output-contract  capabilities missing: %s" % ", ".join(missing))
@@ -147,6 +147,7 @@ expect_exit 2 "trailing garbage"      "$BIN" --message-bytes 12x
 expect_exit 2 "negative"              "$BIN" --threads -4
 expect_exit 2 "out of range"          "$BIN" --samples 0
 expect_exit 2 "unknown algorithm"     "$BIN" --algorithm nosuchalg
+expect_exit 2 "unknown host memory"   "$BIN" --host-memory locked
 
 # --device used to bound at VB_MAX_THREADS (1024) while the measurement path
 # reserved VB_OCL_MAX_DEVICES (32), and copied between them unchecked. Indices

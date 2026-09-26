@@ -89,6 +89,12 @@ void vb_ocl_ctx_free(vb_ocl_ctx *c)
 
     if (c->event)      cl->ReleaseEvent(c->event);
     if (c->xfer_event) cl->ReleaseEvent(c->xfer_event);
+    if (c->staging && c->queue) {
+        cl->EnqueueUnmapMemObject(c->queue, c->h_staging, c->staging, 0, NULL,
+                                  NULL);
+        cl->Finish(c->queue);
+    }
+    if (c->h_staging) cl->ReleaseMemObject(c->h_staging);
     if (c->kernel)    cl->ReleaseKernel(c->kernel);
     if (c->program)   cl->ReleaseProgram(c->program);
     if (c->d_corpus)  cl->ReleaseMemObject(c->d_corpus);
@@ -474,11 +480,40 @@ fail:
     return -1;
 }
 
-void vb_ocl_ctx_set_stream(vb_ocl_ctx *c, int on)
+/* A mapped, driver-allocated buffer holding a copy of the slice. On failure
+   everything it made is released and streaming reads pageable memory. */
+static void pin_staging(vb_ocl_ctx *c)
+{
+    const vb_ocl *cl = vb_ocl_api();
+    cl_int err;
+
+    c->h_staging = cl->CreateBuffer(c->context,
+                                    CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+                                    c->corpus_bytes, NULL, &err);
+    if (!c->h_staging)
+        return;
+
+    c->staging = cl->EnqueueMapBuffer(c->queue, c->h_staging, CL_TRUE,
+                                      CL_MAP_WRITE, 0, c->corpus_bytes, 0,
+                                      NULL, NULL, &err);
+    if (!c->staging) {
+        cl->ReleaseMemObject(c->h_staging);
+        c->h_staging = NULL;
+        return;
+    }
+    memcpy(c->staging, c->host_slice, c->corpus_bytes);
+    c->host_pinned = 1;
+}
+
+int vb_ocl_ctx_set_stream(vb_ocl_ctx *c, int on, int pinned)
 {
     c->stream = on ? 1 : 0;
-    if (on)
+    if (on) {
         c->repeats = 1;
+        if (pinned && !c->staging)
+            pin_staging(c);
+    }
+    return 0;
 }
 
 int vb_ocl_ctx_enqueue(vb_ocl_ctx *c, uint32_t iterations)
@@ -534,9 +569,10 @@ int vb_ocl_ctx_enqueue(vb_ocl_ctx *c, uint32_t iterations)
      * separately by their own events rather than by bracketing wall clock.
      */
     if (c->stream) {
+        const void *src = c->staging ? c->staging : c->host_slice;
         err = cl->EnqueueWriteBuffer(c->queue, c->d_corpus, CL_FALSE, 0,
                                      c->corpus_bytes,
-                                     (void *) (uintptr_t) c->host_slice,
+                                     (void *) (uintptr_t) src,
                                      0, NULL, &c->xfer_event);
         if (err != CL_SUCCESS) {
             set_err(c, "corpus upload (%.1f MiB): %s",
