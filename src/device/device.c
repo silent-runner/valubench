@@ -293,8 +293,10 @@ void vb_dev_ctx_free(vb_dev_ctx *c)
 {
     if (!c)
         return;
-    if (c->be && c->impl)
+    if (c->be && c->impl) {
+        vb_dev_pipe_end(c, 1);
         c->be->destroy(c);
+    }
     free(c->partials);
     memset(c, 0, sizeof *c);
 }
@@ -537,52 +539,78 @@ int vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned)
                             c->n_partials * partial_bytes(c));
 }
 
-int vb_dev_pipe_run(vb_dev_ctx *ctx, int n, uint32_t iterations,
-                    uint64_t passes, uint64_t (*out)[VB_MAX_DIGEST_WORDS],
-                    uint64_t *kernel_ns, uint64_t *transfer_ns)
+void vb_dev_pipe_begin(vb_dev_ctx *ctx, int n, uint32_t iterations)
+{
+    for (int d = 0; d < n; d++) {
+        ctx[d].pipe_running = 1;
+        ctx[d].pipe_iterations = iterations;
+        ctx[d].pipe_queued = ctx[d].pipe_collected = 0;
+    }
+}
+
+/* Queue the next chunk: the slice of the pass it belongs to, in order. */
+static int pipe_queue(vb_dev_ctx *c)
+{
+    uint64_t s = c->pipe_queued, first, count;
+    vb_dev_slice(c->n_groups, (int) c->pipe_chunks, (int) (s % c->pipe_chunks),
+                 &first, &count);
+    if (c->be->pipe_enqueue(c, s, (size_t) first * c->group_bytes,
+                            (size_t) count * c->group_bytes, count,
+                            c->pipe_iterations,
+                            c->local_size * partial_bytes(c),
+                            c->n_partials * partial_bytes(c)) != 0)
+        return -1;
+    c->pipe_queued++;
+    return 0;
+}
+
+int vb_dev_pipe_next(vb_dev_ctx *ctx, int n, uint64_t passes,
+                     uint64_t (*out)[VB_MAX_DIGEST_WORDS],
+                     uint64_t *kernel_ns, uint64_t *transfer_ns)
 {
     uint64_t k[VB_DEV_MAX] = { 0 }, t[VB_DEV_MAX] = { 0 };
-    uint64_t steps = 0;
+    uint64_t base[VB_DEV_MAX], stop[VB_DEV_MAX];
 
-    for (int d = 0; d < n; d++)
-        if (passes * ctx[d].pipe_chunks > steps)
-            steps = passes * ctx[d].pipe_chunks;
+    /* Every call collects whole passes, so each starts on a pass boundary. */
+    for (int d = 0; d < n; d++) {
+        base[d] = ctx[d].pipe_collected;
+        stop[d] = base[d] + passes * ctx[d].pipe_chunks;
+    }
     memset(out, 0, (size_t) passes * sizeof *out);
 
     /*
-     * One step at a time across every device, so they all run at once: at
-     * step s, collect chunk s - VB_PIPE_RING (which frees its readback slot)
-     * and queue chunk s. The device therefore always has several chunks
-     * queued ahead of the one the host is folding, and the pipeline runs
-     * straight across pass boundaries -- a pass is only a unit of
-     * verification, not a point where anything drains.
+     * One chunk per device per round, so every device runs at once. Before
+     * collecting a chunk, top its device up to VB_PIPE_RING queued. That is
+     * as far ahead as it can go -- chunk s + VB_PIPE_RING reuses chunk s's
+     * readback slot, so it waits for s to be collected -- and far enough that
+     * the device always has several chunks ahead of the one the host folds.
+     * Near the end of a call the top-up runs past it, which is the point: the
+     * chunks after the last one asked for are already queued when it
+     * arrives, so the device keeps hashing while the caller reads the clock,
+     * and the next call finds the pipeline full. Passes are units of
+     * verification and calls are units of timing; neither is a point where
+     * anything drains.
      */
-    for (uint64_t s = 0; s < steps + VB_PIPE_RING; s++) {
+    for (int busy = 1; busy; ) {
+        busy = 0;
         for (int d = 0; d < n; d++) {
             vb_dev_ctx *c = &ctx[d];
-            uint64_t total = passes * c->pipe_chunks;
+            if (c->pipe_collected >= stop[d])
+                continue;
+            busy = 1;
+            while (c->pipe_queued < c->pipe_collected + VB_PIPE_RING)
+                if (pipe_queue(c) != 0)
+                    return -1;
 
-            if (s >= VB_PIPE_RING && s - VB_PIPE_RING < total) {
-                uint64_t done = s - VB_PIPE_RING;
-                const void *p = NULL;
-                uint64_t kn = 0, tn = 0;
-                if (c->be->pipe_wait(c, done, &p, &kn, &tn) != 0)
-                    return -1;
-                k[d] += kn;
-                t[d] += tn;
-                fold(c, p, out[done / c->pipe_chunks]);
-            }
-            if (s < total) {
-                uint64_t first, count;
-                vb_dev_slice(c->n_groups, (int) c->pipe_chunks,
-                             (int) (s % c->pipe_chunks), &first, &count);
-                if (c->be->pipe_enqueue(c, s, (size_t) first * c->group_bytes,
-                                        (size_t) count * c->group_bytes, count,
-                                        iterations,
-                                        c->local_size * partial_bytes(c),
-                                        c->n_partials * partial_bytes(c)) != 0)
-                    return -1;
-            }
+            uint64_t done = c->pipe_collected;
+            const void *p = NULL;
+            uint64_t kn = 0, tn = 0;
+            if (c->be->pipe_wait(c, done, &p, &kn, &tn) != 0)
+                return -1;
+            k[d] += kn;
+            t[d] += tn;
+            fold(c, p, out[(done - base[d]) / c->pipe_chunks]);
+            c->pipe_collected++;
         }
     }
 
@@ -594,6 +622,26 @@ int vb_dev_pipe_run(vb_dev_ctx *ctx, int n, uint32_t iterations,
             *transfer_ns = t[d];
     }
     return 0;
+}
+
+void vb_dev_pipe_end(vb_dev_ctx *ctx, int n)
+{
+    for (int d = 0; d < n; d++) {
+        vb_dev_ctx *c = &ctx[d];
+        if (!c->pipe_running)
+            continue;
+        /* Collected only to retire them: what was queued past the last timed
+           pass is neither timed nor checked. A failure here leaves the rest
+           to the backend's destroy, which waits for its queues anyway. */
+        while (c->pipe_collected < c->pipe_queued) {
+            const void *p = NULL;
+            uint64_t kn, tn;
+            if (c->be->pipe_wait(c, c->pipe_collected, &p, &kn, &tn) != 0)
+                break;
+            c->pipe_collected++;
+        }
+        c->pipe_running = 0;
+    }
 }
 
 int vb_dev_ctx_run(vb_dev_ctx *c, uint32_t iterations,
