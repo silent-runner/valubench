@@ -277,7 +277,8 @@ jobs:
           make CC=gcc CFLAGS_EXTRA="$SAN" BUILD=build-san config
           make CC=gcc CFLAGS_EXTRA="$SAN" BUILD=build-san -j$(nproc) \
                build-san/valubench build-san/test_hashes \
-               build-san/test_kernels build-san/test_checkpoints
+               build-san/test_kernels build-san/test_checkpoints \
+               build-san/test_device_layer
 
       - name: known-answer vectors and every kernel
         env:
@@ -287,6 +288,9 @@ jobs:
           ./build-san/test_hashes
           ./build-san/test_kernels
           ./build-san/test_checkpoints
+          # The PTX translation behind --import-ptx reads a file from the
+          # command line; this is where an overrun on hostile input shows.
+          ./build-san/test_device_layer
 
       # The CLI is the reachable attack surface: everything here is a local
       # input that once crashed or truncated.
@@ -359,6 +363,14 @@ jobs:
             echo "  $k $got"
             test "$got" = "$want"
           done
+
+      # test_kernels on a machine with a device: every OpenCL kernel against the
+      # reference across message sizes and iteration counts, and through the
+      # streaming and pipelined paths, pass by pass across calls. CUDA kernels
+      # skip themselves with no driver. The main job runs it too, but with no
+      # device there every device kernel skips.
+      - name: every OpenCL kernel, every transfer path, against the reference
+        run: make check-kernels
 
       - name: streaming transfer and multi-device slicing must also verify
         run: |

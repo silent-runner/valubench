@@ -272,6 +272,10 @@ void vb_dev_ctx_set_stream(vb_dev_ctx *c, int on, int pinned);
  */
 int  vb_dev_ctx_set_overlap(vb_dev_ctx *c, unsigned chunks, int pinned);
 
+/* The chunk count set_overlap chooses for 0: pure, so a test can check it. */
+unsigned vb_dev_auto_chunks(uint64_t n_groups, uint64_t group_bytes,
+                            uint64_t global_mem);
+
 /*
  * A pipeline that stays full between calls, one per device, all devices
  * concurrently.

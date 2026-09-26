@@ -10,7 +10,7 @@ make check                           # known-answer vectors + every kernel
 make config                          # what this toolchain can build
 ```
 
-`make check` runs twelve checks. The two that everything rests on are the
+`make check` runs fourteen checks. The two that everything rests on are the
 published test vectors (RFC 1321, FIPS 180-4) against the scalar references,
 and every registered kernel against those references across message sizes,
 block boundaries, lane counts and iteration counts. The rest guard the harness

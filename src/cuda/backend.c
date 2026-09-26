@@ -25,6 +25,7 @@
 
 #include "device.h"
 #include "cuda_loader.h"
+#include "cuda_ptx.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -190,85 +191,8 @@ static void dump_file(const char *dir, const char *name, const void *data,
 
 /* ---- importing OpenCL's PTX -------------------------------------------- */
 
-/*
- * NVIDIA's OpenCL compiler emits PTX, and the CUDA driver can run it once
- * OpenCL's calling convention is translated -- which makes a 2x2 of frontend
- * against runtime, and lets Nsight Compute, which sees only CUDA, profile the
- * code OpenCL's compiler produced. The translation touches no hash code:
- *
- *   - kernel parameters carry OpenCL's state-space qualifiers (".ptr .global
- *     .align 4"), which the CUDA loader rejects as an invalid image; they are
- *     annotations, and the pointers are used as they are either way;
- *   - OpenCL reads its launch environment from %envreg registers the CUDA
- *     runtime never sets: %envreg0 and %envreg3 are the group and global
- *     offsets, zero for any launch here, and %envreg6 is the group count,
- *     which CUDA calls %nctaid.x. Any other %envreg is refused, not guessed;
- *   - the __local scratch argument stays, and the launch passes it the
- *     address of the dynamic shared region.
- *
- * Checked on an RTX PRO 2000 against NVRTC's kernel on the same data before
- * it was trusted, and the checksum gate checks it on every run after.
- */
-static char *ocl_ptx_to_cuda(const char *in, int *ocl_abi, char *err,
-                             size_t errn)
-{
-    size_t n = strlen(in);
-    char *out = malloc(n + 64 * 1024);
-    if (!out) {
-        snprintf(err, errn, "out of memory");
-        return NULL;
-    }
-    size_t o = 0;
-    *ocl_abi = strstr(in, ".ptr .shared") != NULL;
-
-    for (const char *p = in; *p; ) {
-        if (!strncmp(p, " .ptr .", 7)) {
-            /* " .ptr .<space> .align <n>" -- drop it. */
-            const char *q = strstr(p, ".align ");
-            if (q && q - p < 32) {
-                q += 7;
-                while (*q >= '0' && *q <= '9')
-                    q++;
-                p = q;
-                continue;
-            }
-        }
-        if (!strncmp(p, "%envreg", 7)) {
-            int reg = atoi(p + 7);
-            const char *rest = p + 7;
-            while (*rest >= '0' && *rest <= '9')
-                rest++;
-            const char *with = NULL;
-            if (reg == 0 || reg == 3)
-                with = "0";
-            else if (reg == 6)
-                with = "%nctaid.x";
-            if (!with) {
-                snprintf(err, errn, "the PTX reads %%envreg%d, which has no "
-                         "CUDA equivalent here", reg);
-                free(out);
-                return NULL;
-            }
-            /* mov.b32 from a special register wants the .u32 spelling. */
-            if (reg == 6 && o >= 16) {
-                char *mv = NULL;
-                for (size_t k = o; k > 0 && out[k - 1] != '\n'; k--)
-                    if (!strncmp(out + k - 1, "mov.b32", 7))
-                        mv = out + k - 1;
-                if (mv)
-                    memcpy(mv, "mov.u32", 7);
-            }
-            size_t wl = strlen(with);
-            memcpy(out + o, with, wl);
-            o += wl;
-            p = rest;
-            continue;
-        }
-        out[o++] = *p++;
-    }
-    out[o] = '\0';
-    return out;
-}
+/* The translation itself is src/cuda/ptx_import.c, where a test can reach it
+   without a driver; what is left here is what needs the device. */
 
 /* Where the dynamic shared region starts in the shared window: the value
    OpenCL's runtime passes for a __local argument. Not zero -- recent parts
@@ -382,7 +306,7 @@ static int cu_build(vb_dev_ctx *c, const char *source, const char *entry,
             set_err(c, "--import-ptx: %s", err);
             return -1;
         }
-        ptx = ocl_ptx_to_cuda(raw, &m->ocl_abi, err, sizeof err);
+        ptx = vb_ptx_from_opencl(raw, &m->ocl_abi, err, sizeof err);
         free(raw);
         if (!ptx) {
             set_err(c, "--import-ptx %s: %s", o->import_ptx, err);
