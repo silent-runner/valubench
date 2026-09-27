@@ -1130,7 +1130,10 @@ say "packaging"
 {
     echo "valubench session"
     echo "commit:   $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo 'not a git repo')"
-    echo "started:  $(date -u -d "@$START" 2>/dev/null || date -u)"
+    # -d @SECONDS is GNU date; BSD date spells it -r SECONDS. Without the
+    # second form a Mac fell through to the bare `date -u`, and every capture
+    # recorded that it started at the moment it ended.
+    echo "started:  $(date -u -d "@$START" 2>/dev/null || date -u -r "$START" 2>/dev/null || date -u)"
     echo "ended:    $(date -u)"
     echo "quick:    $QUICK"
     echo "only:     ${ONLY:-both}"
