@@ -227,13 +227,14 @@ jobs:
             done
           done
           # 36 lanes-times-streams does not tile the batch: the tool must say
-          # so and exit 2, not report a verification failure against silicon
-          # that is behaving perfectly.
+          # so and exit 4 -- the command is valid, and a machine with another
+          # vector length could run it -- not report a verification failure
+          # against silicon that is behaving perfectly.
           qemu-aarch64-static -cpu max,sve-max-vq=3 ./build-arm64/valubench \
             --kernel md5/sve-s3 --samples 1 --time-ms 20 --warmup-ms 20 \
             >/dev/null 2>&1 && rc=0 || rc=$?
-          echo "  VL=384 md5/sve-s3 exit $rc (want 2)"
-          test "$rc" = 2 || fail=1
+          echo "  VL=384 md5/sve-s3 exit $rc (want 4)"
+          test "$rc" = 4 || fail=1
           test "$fail" = 0
 
       # The SVE kernels must actually contain SVE instructions. The compiler

@@ -126,9 +126,10 @@ static void usage(FILE *f, const char *argv0)
 "  --version            print version\n"
 "  -h, --help           this text\n"
 "\n"
-"Exit status: 0 success, 1 verification failure, 2 usage error or the\n"
-"             kernel could not run (no memory, threads, or device),\n"
-"             3 result too noisy to trust.\n",
+"Exit status: 0 success, 1 verification failure, 2 usage error,\n"
+"             3 result too noisy to trust, 4 a valid command this machine\n"
+"             could not run (no such CPU feature or device, no memory for\n"
+"             the corpus, threads that would not start).\n",
             VB_MAX_SAMPLES);
 }
 
@@ -443,15 +444,17 @@ static int parse_ladder(const char *arg, uint32_t *out, unsigned max,
  * these values under a different algorithm, message size or working set would
  * be verifying against the wrong truth. sweep.py keys its cache on them.
  */
-static void emit_reference_ladder(const vb_config *cfg, const uint32_t *iters,
-                                  unsigned n)
+static int emit_reference_ladder(const vb_config *cfg, const uint32_t *iters,
+                                 unsigned n)
 {
     uint64_t count = vb_batch_messages(cfg);
     uint64_t (*out)[VB_MAX_DIGEST_WORDS] = calloc(n, sizeof *out);
 
+    /* Exiting 0 here left a sweep to use whatever it had parsed as the
+       expected checksums. */
     if (!out) {
-        fprintf(stderr, "valubench: out of memory\n");
-        return;
+        fprintf(stderr, "valubench: out of memory for the reference ladder\n");
+        return -1;
     }
 
     vb_reference_checksums_mt(cfg->alg, 0, count, cfg->message_bytes,
@@ -477,6 +480,7 @@ static void emit_reference_ladder(const vb_config *cfg, const uint32_t *iters,
     }
     printf("  ]\n}\n");
     free(out);
+    return 0;
 }
 
 /*
@@ -839,10 +843,9 @@ int main(int argc, char **argv)
     if (expect_arg && !parse_expect(expect_arg, &cfg))
         return VB_EXIT_USAGE;
 
-    if (action == ACT_REFERENCE) {
-        emit_reference_ladder(&cfg, ladder, n_ladder);
-        return VB_EXIT_OK;
-    }
+    if (action == ACT_REFERENCE)
+        return emit_reference_ladder(&cfg, ladder, n_ladder) == 0
+               ? VB_EXIT_OK : VB_EXIT_CANNOT_RUN;
 
     /* A chunk count means nothing unless the upload is pipelined. */
     if (chunks_given && cfg.transfer != VB_TRANSFER_OVERLAP) {
@@ -874,48 +877,38 @@ int main(int argc, char **argv)
         return VB_EXIT_USAGE;
     }
 
+    /*
+     * An explicit --device past this machine's last device. The index passed
+     * the parser's static bound, so the command is valid, and a machine with
+     * more devices could run it: 4. Autotune used to count the device kernels
+     * as unable to run, pick the CPU winner and exit 0, so a mistyped --device
+     * produced a CPU number. Only where a device kernel could be chosen; with a
+     * CPU kernel --device has never meant anything.
+     */
+    if (cfg.device_count > 0 && ((k && k->device) ||
+                                 (!k && cfg.where != VB_WHERE_CPU))) {
+        vb_device devs[VB_DEV_MAX];
+        int n = vb_devices(devs, VB_DEV_MAX);
+        if (n < 0)
+            n = 0;
+        for (int i = 0; i < cfg.device_count; i++)
+            if (cfg.device_index[i] >= n) {
+                fprintf(stderr, "valubench: --device %d names a device this "
+                                "machine lacks (%d found; see --list-devices)\n",
+                        cfg.device_index[i], n);
+                return VB_EXIT_CANNOT_RUN;
+            }
+    }
+
     vb_sysinfo si;
     vb_sysinfo_collect(&si);
 
     /* Autotune output is progress, not result: keep it off stdout in JSON mode
        so the JSON stays parseable without filtering. */
     if (k) {
-        if (!k->available()) {
-            if (k->device) {
-                /* The backend's own reason, which may be a missing compiler
-                   rather than a missing device. */
-                const char *why = vb_backend_unavailable((vb_backend_id)
-                                                         k->backend);
-                fprintf(stderr, "valubench: kernel '%s' cannot run here: %s\n",
-                        k->name, why ? why : "no device reachable through this API");
-            } else {
-                fprintf(stderr,
-                        "valubench: kernel '%s' needs %s, which this CPU "
-                        "lacks\n", k->name, k->isa);
-            }
-            return VB_EXIT_USAGE;
-        }
-        /*
-         * Every kernel's lanes x streams must divide the batch, or it cannot
-         * cover the corpus and the checksum would be over a different set of
-         * messages than every other kernel's.
-         *
-         * Only reachable with a vector-length-agnostic ISA, where lanes are
-         * not known when the table is written: 12 lanes at three streams is
-         * 36, and 36 does not divide 768. Autotune skips such a kernel
-         * silently, which is right, but naming one explicitly used to report
-         * "the hardware did not compute correct digests" -- blaming the
-         * silicon for what is a property of the vector length.
-         */
-        if (!vb_batch_divides(k)) {
-            fprintf(stderr,
-                    "valubench: kernel '%s' cannot run at this vector length: "
-                    "%u lanes x %u streams = %u, which does not divide the "
-                    "%u-message batch. Try a different stream count.\n",
-                    k->name, k->lanes, k->streams, k->lanes * k->streams,
-                    VB_BATCH_LCM);
-            return VB_EXIT_USAGE;
-        }
+        /* Contradictions first: a command that is wrong everywhere is a usage
+           error even on a machine that also could not run it. */
+
         /* A kernel from an API --backend excludes, and a CUDA compile mode
            for a kernel that is not CUDA, are contradictions of the same kind:
            one would silently win over the other. */
@@ -943,6 +936,45 @@ int main(int argc, char **argv)
                     cfg.where == VB_WHERE_CPU ? "cpu" : "device");
             return VB_EXIT_USAGE;
         }
+
+        /* Then what this machine lacks: the same command would run elsewhere. */
+        if (!k->available()) {
+            if (k->device) {
+                /* The backend's own reason, which may be a missing compiler
+                   rather than a missing device. */
+                const char *why = vb_backend_unavailable((vb_backend_id)
+                                                         k->backend);
+                fprintf(stderr, "valubench: kernel '%s' cannot run here: %s\n",
+                        k->name, why ? why : "no device reachable through this API");
+            } else {
+                fprintf(stderr,
+                        "valubench: kernel '%s' needs %s, which this CPU "
+                        "lacks\n", k->name, k->isa);
+            }
+            return VB_EXIT_CANNOT_RUN;
+        }
+        /*
+         * Every kernel's lanes x streams must divide the batch, or it cannot
+         * cover the corpus and the checksum would be over a different set of
+         * messages than every other kernel's.
+         *
+         * Only reachable with a vector-length-agnostic ISA, where lanes are
+         * not known when the table is written: 12 lanes at three streams is
+         * 36, and 36 does not divide 768. Autotune skips such a kernel
+         * silently, which is right, but naming one explicitly used to report
+         * "the hardware did not compute correct digests" -- blaming the
+         * silicon for what is a property of the vector length. A machine with
+         * another vector length could run it, so 4.
+         */
+        if (!vb_batch_divides(k)) {
+            fprintf(stderr,
+                    "valubench: kernel '%s' cannot run at this vector length: "
+                    "%u lanes x %u streams = %u, which does not divide the "
+                    "%u-message batch. Try a different stream count.\n",
+                    k->name, k->lanes, k->streams, k->lanes * k->streams,
+                    VB_BATCH_LCM);
+            return VB_EXIT_CANNOT_RUN;
+        }
     } else {
         vb_autotune_outcome why;
         k = vb_autotune(&cfg, verbose && !as_json, &why);
@@ -967,11 +999,11 @@ int main(int argc, char **argv)
             if (why.could_not_run) {
                 fprintf(stderr, "valubench: no %skernel could run: %s\n",
                         scope, why.run_error);
-                return VB_EXIT_USAGE;
+                return VB_EXIT_CANNOT_RUN;
             }
             fprintf(stderr, "valubench: no %skernel is available for %s on "
                             "this machine\n", scope, cfg.alg->name);
-            return VB_EXIT_USAGE;
+            return VB_EXIT_CANNOT_RUN;
         }
     }
 
@@ -981,12 +1013,11 @@ int main(int argc, char **argv)
            threads that would not start, a device that could not be set up --
            says nothing about the hardware's arithmetic. Reporting it as a
            verification failure told people to check overclocking and cooling
-           for an out-of-memory corpus. Say which, and keep the exit code the
-           one a device setup failure has always used. */
+           for an out-of-memory corpus. */
         if (r.run_error[0]) {
             fprintf(stderr, "valubench: kernel '%s' could not run:\n  %s\n",
                     k->name, r.run_error);
-            return VB_EXIT_USAGE;
+            return VB_EXIT_CANNOT_RUN;
         }
         fprintf(stderr,
 "valubench: VERIFICATION FAILED for kernel '%s'.\n"

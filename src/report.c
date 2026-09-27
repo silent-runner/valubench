@@ -795,8 +795,9 @@ void vb_report_capabilities_json(FILE *f)
     fprintf(f, "  },\n");
 
     fprintf(f, "  \"exit_codes\": { \"ok\": %d, \"verify_failed\": %d, "
-               "\"usage\": %d, \"noisy\": %d },\n",
-            VB_EXIT_OK, VB_EXIT_VERIFY_FAILED, VB_EXIT_USAGE, VB_EXIT_NOISY);
+               "\"usage\": %d, \"noisy\": %d, \"cannot_run\": %d },\n",
+            VB_EXIT_OK, VB_EXIT_VERIFY_FAILED, VB_EXIT_USAGE, VB_EXIT_NOISY,
+            VB_EXIT_CANNOT_RUN);
 
     fprintf(f, "  \"transfer_modes\": [\"resident\", \"stream\", \"overlap\"],\n");
     fprintf(f, "  \"host_memory_modes\": [\"pinned\", \"pageable\"],\n");

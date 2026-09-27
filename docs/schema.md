@@ -124,13 +124,22 @@ whether a change is real should compare the spread *between* runs; see
 ### Exit codes
 
 Reported in the capabilities document under `exit_codes`, so a driver need not
-hard-code them: `0` success, `1` verification failure, `2` usage error, `3`
-result too noisy to trust. Exit 3 still produces valid JSON on stdout.
+hard-code them: `0` success (`ok`), `1` verification failure
+(`verify_failed`), `2` usage error (`usage`), `3` result too noisy to trust
+(`noisy`), `4` could not run (`cannot_run`). Exit 3 still produces valid JSON on
+stdout.
 
-`2` is also used when a kernel could not run at all -- the corpus could not be
-allocated, the worker threads could not all start, or a device could not be set
-up -- with a "could not run" message on stderr. `1` is only ever a digest that
-did not match, whatever `--where` or `--kernel` restricted the candidates to.
+Each code says what to do next. `1` is only ever a digest that did not match,
+whatever `--where` or `--kernel` restricted the candidates to: investigate the
+machine. `2` means the command is wrong -- malformed or contradictory options --
+and would be wrong anywhere. `4` means the command is valid but this machine,
+now, could not run it: a `--kernel` needing an instruction set or device this
+machine lacks, `--where device` with no device, a `--device` past the last one,
+a corpus that could not be allocated, worker threads that would not all start,
+a device that could not be set up. Record it and move on, or retry elsewhere or
+smaller. The reason is on stderr. A command both contradictory and impossible
+here gets `2`. `cannot_run` is absent from 0.7.0 and earlier, which returned `2`
+for all of these.
 
 ## `valubench/capabilities/1`
 

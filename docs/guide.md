@@ -568,13 +568,16 @@ and any conditions that make the result less trustworthy:
 ```
 
 Exit status: `0` success, `1` verification failure, `2` usage error, `3` result
-too noisy to trust.
+too noisy to trust, `4` could not run.
 
-Exit `2` also covers a kernel that **could not run** -- a corpus too large for
-memory, worker threads that would not start, a device that could not be set
-up. Those are said as such on stderr ("could not run: ...") and are never
-reported as a verification failure: exit `1` is reserved for the hardware
-computing a wrong digest, which is why it stops a sweep and exit `2` does not.
+Exit `4` is a valid command this machine could not run -- a kernel needing an
+instruction set or device it lacks, a `--device` past its last one, a corpus
+too large for memory, worker threads that would not start, a device that could
+not be set up. The test is whether the same command would succeed on another
+machine; if it would fail anywhere, it is `2`. The reason is on stderr ("could
+not run: ..."), and it is never reported as a verification failure: exit `1`
+is reserved for the hardware computing a wrong digest, which is why it stops a
+sweep and exit `4` does not -- `sweep.py` records the point and carries on.
 
 ## Kernels
 
