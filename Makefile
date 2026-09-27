@@ -526,8 +526,14 @@ check-config: $(BUILD)/test_config
 # No baseline needed, which is the point: this is an invariant, not a
 # comparison against a recorded figure. A single-CPU machine cannot test it and
 # says so rather than passing quietly.
+#
+# nproc is GNU coreutils, and macOS does not ship it: the count fell through to
+# 1 and a twelve-core Mac skipped as a single-CPU machine, so the platform skip
+# below was never reached and the check passed for a reason that was false.
+# getconf is POSIX and answers on both. nproc stays first because on Linux it
+# honours the affinity mask, which is the set the pool can actually use.
 check-pinning: need-python3 $(BUILD)/valubench
-	@n=$$(nproc 2>/dev/null || echo 1); \
+	@n=$$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1); \
 	 if [ "$$n" -lt 2 ]; then \
 	   echo "  skip  pinning       (needs >1 cpu; this machine has $$n)"; \
 	 else \
