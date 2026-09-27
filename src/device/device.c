@@ -261,15 +261,31 @@ unsigned vb_dev_waves(size_t global, uint64_t n_groups, unsigned lanes,
 }
 
 /*
+ * The iteration count the tuner times candidates at: the one being measured,
+ * up to this. Timed at one iteration, a corpus in DRAM made every grid tie at
+ * the memory's speed, so the tuner kept one by chance -- and when the run
+ * itself was compute-bound the chance mattered: on an RTX PRO 2000 at 256 MiB
+ * and 128 iterations, one kernel's pick ran 8% under the device's capacity
+ * grid while another's ran 6% over it. Past a few iterations per message a
+ * resident run is compute-bound on every device measured, so a longer probe
+ * would measure the same thing, only slower.
+ */
+#define VB_DEV_TUNE_MAX_ITERS 64u
+
+/*
  * Pick the launch geometry by measurement rather than by formula. The right
  * number of work-items is a device property, not a workload one; guessing
  * wrong is expensive -- an early version launched one work-item per message,
  * tying occupancy to --working-set-kb, and cost 1.8x on an iGPU. Every
  * candidate is at most what the device holds at once, and the largest
- * candidate is exactly that.
+ * candidate is exactly that. Candidates are timed in the regime being
+ * measured: at its iteration count, up to VB_DEV_TUNE_MAX_ITERS.
  */
-static int tune_geometry(vb_dev_ctx *c)
+static int tune_geometry(vb_dev_ctx *c, uint32_t iterations)
 {
+    const uint32_t it = iterations == 0 ? 1
+                      : iterations < VB_DEV_TUNE_MAX_ITERS ? iterations
+                      : VB_DEV_TUNE_MAX_ITERS;
     const size_t cap = max_global(c);
     double best = -1.0;
     size_t best_global = 0, best_local = 0, best_held = 0;
@@ -320,10 +336,10 @@ static int tune_geometry(vb_dev_ctx *c)
                context: a device can accept the scratch request and still
                refuse the launch for reasons no query exposes. */
             uint64_t cs[VB_MAX_DIGEST_WORDS];
-            if (vb_dev_ctx_run(c, 1, cs) != 0)      /* warm */
+            if (vb_dev_ctx_run(c, it, cs) != 0)     /* warm */
                 break;
             uint64_t t0 = c->last_kernel_ns;
-            if (vb_dev_ctx_run(c, 1, cs) != 0)      /* measured */
+            if (vb_dev_ctx_run(c, it, cs) != 0)     /* measured */
                 break;
             uint64_t t1 = c->last_kernel_ns;
 
@@ -545,7 +561,7 @@ int vb_dev_ctx_init(vb_dev_ctx *c, const vb_dev_backend *be,
         /* Measured but not enforced: a pinned grid past it is a control
            someone asked for, and the result says it ran in waves. */
         c->capacity = measure_capacity(c, l);
-    } else if (tune_geometry(c) != 0) {
+    } else if (tune_geometry(c, o->iterations) != 0) {
         fail_keep_error(c);
         return -1;
     }
