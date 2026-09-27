@@ -250,6 +250,117 @@ jobs:
             test "$n" -gt 1000
           done
 
+  # Apple silicon, natively. design.md finding 10 admits the platform on the
+  # condition that Linux pays nothing for it, and this job is the half of that
+  # bargain Linux CI cannot see: without it the port rots silently, and every
+  # change to the threading code becomes a check someone must run on a Mac by
+  # hand. The runners are virtual machines on Apple hardware, so throughput here
+  # is as worthless as on any shared runner; correctness is the point. Two
+  # images, because they carry different Apple clangs, and on this project the
+  # compiler has moved results further than the instruction set.
+  macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    name: ${{ matrix.os }} (apple silicon)
+    steps:
+      - uses: actions/checkout@v7
+
+      # GNU make only. macOS's own make is 3.81 and cannot read the Makefile;
+      # Homebrew's installs as gmake. No coreutils, on purpose: a Mac has no
+      # nproc or timeout, and the checks must work without them rather than
+      # pass because a runner happened to have them.
+      - name: install GNU make
+        run: brew install make
+
+      - name: show what this toolchain can build
+        run: gmake config
+
+      - name: build
+        run: |
+          gmake -j"$(sysctl -n hw.ncpu)"
+          test -x build/valubench || { echo "FAIL: make produced no binary"; exit 1; }
+
+      - name: known-answer vectors and every kernel against its reference
+        run: gmake check
+
+      # Each skip the port introduced is allowed for one reason, and must give
+      # it. A skip for any other reason is how this path already failed once:
+      # with no nproc, check-pinning took a twelve-core Mac for a single-CPU
+      # machine and skipped before it reached the platform gate. And the
+      # thread-failure check must have injected something -- on macOS it once
+      # passed with an injector that dyld never loaded.
+      - name: the port's skips must be the platform's, and injection must happen
+        run: |
+          gmake check-pinning | tee pin.log
+          grep -q 'skip  pinning .*no thread affinity API on this platform' pin.log \
+            || { echo "FAIL: check-pinning did not skip for the platform"; exit 1; }
+          gmake check-threadfail | tee tf.log
+          grep -q '^  ok    threadfail' tf.log \
+            || { echo "FAIL: check-threadfail did not report ok"; exit 1; }
+
+      # NEON is what this platform runs, so NEON must be what ran, and it must
+      # agree with every other machine. A build that fell back to scalar would
+      # verify too, and under-report the hardware several-fold.
+      - name: the NEON checksum must match the x86 value
+        run: |
+          out=$(./build/valubench --kernel md5/neon-s4 --threads 1 \
+                  --samples 2 --time-ms 20 --warmup-ms 20) && rc=0 || rc=$?
+          case "$rc" in
+            0|3) ;;
+            *) echo "FAIL: the run exited $rc"; exit 1 ;;
+          esac
+          got=$(printf '%s' "$out" | grep -o 'checksum [0-9a-f]*' | cut -d' ' -f2)
+          echo "neon: $got  (run exited $rc)"
+          test "$got" = "955e84cbbc05470019604a2bd9ff2821"
+
+      # The toolchain builds the SVE kernels here, so only the sysctl gate keeps
+      # them off a core without SVE. They must be registered, and asking for one
+      # must exit 4, could not run -- not SIGILL, and not a verification
+      # failure. Conditioned on the flag rather than on Apple never shipping SVE.
+      - name: SVE must be registered, and refused where the core lacks it
+        run: |
+          n=$(./build/valubench --list | grep -c sve)
+          echo "  sve rows registered: $n"
+          test "$n" -gt 0
+          if [ "$(sysctl -n hw.optional.arm.FEAT_SVE 2>/dev/null)" != 1 ]; then
+            for k in md5/sve-s1 md5/sve2-s1; do
+              ./build/valubench --kernel $k --samples 1 --time-ms 20 \
+                --warmup-ms 0 >/dev/null 2>&1 && rc=0 || rc=$?
+              echo "  $k exit $rc (want 4)"
+              test "$rc" = 4
+            done
+          fi
+
+      # Finding 10's third condition: a platform that cannot pin says so in the
+      # data, not merely in a warning -- in the JSON, and through sweep.py into
+      # the CSV that results.db is built from.
+      - name: the capture must say this run could not pin
+        run: |
+          ./build/valubench --json --threads 2 --samples 2 --time-ms 20 \
+            --warmup-ms 20 > run.json && rc=0 || rc=$?
+          test "$rc" = 0 || test "$rc" = 3
+          python3 tools/sweep.py --bin ./build/valubench --algorithm md5 \
+            --kernel md5/neon-s4 --threads 2 --samples 2 --time-ms 20 \
+            --warmup-ms 20 -q --csv sweep.csv > /dev/null
+          python3 - <<'PY'
+          import csv, json
+          d = json.load(open("run.json"))
+          e = d["environment"]
+          assert e["can_pin"] is False, "JSON can_pin: %r" % e["can_pin"]
+          assert e["pinned_cpus"] == 0, "JSON pinned_cpus: %r" % e["pinned_cpus"]
+          assert any("no thread affinity API" in w for w in d["warnings"]), d["warnings"]
+          rows = list(csv.DictReader(open("sweep.csv")))
+          assert rows, "sweep.py wrote no rows"
+          for r in rows:
+              assert r["can_pin"] == "False", "CSV can_pin: %r" % r["can_pin"]
+              assert r["verified"] == "true", "CSV verified: %r" % r["verified"]
+          print("  json: can_pin false, pinned_cpus 0, with the warning")
+          print("  csv:  %d row(s), can_pin=%s" % (len(rows), rows[0]["can_pin"]))
+          PY
+
   # Address and UB sanitizers. This is the job that would have caught the
   # 32-entry device-array overrun on its own, without anyone thinking to try
   # 33 duplicate indices -- which is the argument for having it.
