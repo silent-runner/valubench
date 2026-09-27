@@ -205,7 +205,16 @@ fi
 SW="python3 $SWEEP --samples $SAMPLES --time-ms $TIME_MS --warmup-ms $WARMUP
     --keep-going -q"
 
-NPROC=$(nproc 2>/dev/null || echo 1)
+# nproc first, because on Linux it counts the affinity mask a pool can use.
+# macOS has no nproc, and falling through to 1 would run C5's "all cores" pass
+# on one thread and label the result as the whole machine.
+NPROC=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+
+# The Makefile needs GNU make 4.3 or newer. macOS's own make is 3.81 and
+# Homebrew installs a current one as gmake; where gmake exists it is GNU make,
+# and on the Linux distributions that ship it, the same binary as make.
+MK=make
+command -v gmake >/dev/null 2>&1 && MK=gmake
 
 # ---------------------------------------------------------------- environment
 
@@ -239,7 +248,19 @@ say "environment"
         v=${pair#*:}
         [ -n "$v" ] && printf '  %-14s %s\n' "${pair%%:*}" "$v"
     done
-    echo; echo; echo "# cpu"; lscpu 2>/dev/null || grep -m1 'model name' /proc/cpuinfo
+    echo; echo; echo "# cpu"
+    if [ "$(uname -s)" = Darwin ]; then
+        # No lscpu and no /proc. The core tiers matter more here than on any
+        # other platform: Apple silicon mixes core types, and with no affinity
+        # API nothing decides which type a worker lands on.
+        sysctl machdep.cpu.brand_string hw.physicalcpu hw.logicalcpu hw.nperflevels
+        i=0
+        while [ "$i" -lt "$(sysctl -n hw.nperflevels 2>/dev/null || echo 0)" ]; do
+            sysctl "hw.perflevel$i"; i=$((i + 1))
+        done
+    else
+        lscpu 2>/dev/null || grep -m1 'model name' /proc/cpuinfo
+    fi
     echo; echo "# flags of interest"
     # The two families spell their capability lists differently and share no
     # names, so asking for the x86 set on an AArch64 part prints six MISSINGs
@@ -248,9 +269,20 @@ say "environment"
         aarch64|arm64) FLAGS="asimd sve sve2 sha1 sha2 sha512" ;;
         *)             FLAGS="sse2 avx2 avx512f avx512dq avx512bw sha_ni" ;;
     esac
-    for f in $FLAGS; do
-        grep -qm1 " $f" /proc/cpuinfo && echo "  $f" || echo "  $f MISSING"
-    done
+    if [ "$(uname -s)" = Darwin ]; then
+        # Darwin reports these as hw.optional sysctls. Printed under the Linux
+        # names, so "sve MISSING" means the same thing whichever kernel wrote
+        # this file.
+        for pair in asimd:neon sve:arm.FEAT_SVE sve2:arm.FEAT_SVE2 \
+                    sha1:arm.FEAT_SHA1 sha2:arm.FEAT_SHA256 sha512:arm.FEAT_SHA512; do
+            [ "$(sysctl -n "hw.optional.${pair#*:}" 2>/dev/null)" = 1 ] \
+                && echo "  ${pair%%:*}" || echo "  ${pair%%:*} MISSING"
+        done
+    else
+        for f in $FLAGS; do
+            grep -qm1 " $f" /proc/cpuinfo && echo "  $f" || echo "  $f MISSING"
+        done
+    fi
     echo; echo "# cpufreq"
     cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver 2>/dev/null || echo "  (no cpufreq)"
     cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort | uniq -c
@@ -321,11 +353,11 @@ fi
 # ------------------------------------------------------------------- build
 
 say "build"
-make -C "$REPO" -s clean >/dev/null 2>&1
-if ! make -C "$REPO" -j"$NPROC" > "$OUT/build.log" 2>&1; then
+"$MK" -C "$REPO" -s clean >/dev/null 2>&1
+if ! "$MK" -C "$REPO" -j"$NPROC" > "$OUT/build.log" 2>&1; then
     note "BUILD FAILED -- see build.log"; tail -20 "$OUT/build.log" | show; exit 1
 fi
-make -C "$REPO" config > "$OUT/make-config.txt" 2>&1
+"$MK" -C "$REPO" config > "$OUT/make-config.txt" 2>&1
 "$BIN" --list        > "$OUT/kernels.txt"      2>&1
 "$BIN" --list --json > "$OUT/capabilities.json" 2>&1
 "$BIN" --list-devices > "$OUT/devices.txt"     2>&1
@@ -355,7 +387,7 @@ if [ "$SKIP_CHECK" = 0 ]; then
         note "this builds every OpenCL kernel variant, and NVIDIA JITs through"
         note "PTX, so it can take several minutes."
     fi
-    if make -C "$REPO" check > "$OUT/check.log" 2>&1; then
+    if "$MK" -C "$REPO" check > "$OUT/check.log" 2>&1; then
         note "$(grep -E '^[0-9]+ checks' "$OUT/check.log" | tail -1)"
     else
         note "CHECK FAILED -- every number below is suspect. Continuing anyway;"
