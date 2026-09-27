@@ -48,6 +48,10 @@ PARTS = [
     ("lambda-2xh100", "Xeon 8480+", "Sapphire Rapids"),
     ("lambda-a10",    "Xeon 8358",  "Ice Lake-SP"),
     ("a100-sxm40",    "EPYC 7J13",  "Milan"),
+    # Bare metal, and like the workstation above named for its part. Apple
+    # publishes no microarchitecture names, and an M6 mixes three core types
+    # that its unpinned workers move between, so uarch names the chip.
+    ("macmini-m6",    "Apple M6",   "Apple M6"),
 ]
 
 # Columns that are numbers. Everything else is stored as text.
