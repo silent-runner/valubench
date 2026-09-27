@@ -25,6 +25,11 @@ why they are worth stating before any change:
   primitives are steered per *vendor* and never per API, so CUDA and OpenCL on
   one card compile identical text (`src/kernels/gpu/device_primitives.h`).
 - **`src/registry.c` is generated from the matrix** and never hand-edited.
+- **The checks also run on macOS, which is not GNU userland.** There is no
+  `nproc`, `timeout` or settable `ulimit -v`; `LD_PRELOAD` is ignored, and
+  system binaries strip `DYLD_*`. Each of those once made a check pass or skip
+  without testing anything — a plausible wrong verdict rather than a wrong
+  number. CONTRIBUTING.md has the workarounds; build there with `gmake`.
 
 ## Measured numbers are tracked outside this repository
 

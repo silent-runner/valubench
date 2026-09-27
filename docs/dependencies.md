@@ -24,9 +24,10 @@ your distro, check for the file.
 
 ## Minimum: build and run on CPU
 
-**Needs:** a C11 compiler, `make`, and libc headers. Nothing else to build and
-run. `make check` also needs `python3` (stdlib only): three of its checks read
-the binary's JSON with it, and fail saying so when it is missing.
+**Needs:** a C11 compiler, GNU `make` 4.3 or newer, and libc headers. Nothing
+else to build and run. `make check` also needs `python3` (stdlib only): three
+of its checks read the binary's JSON with it, and fail saying so when it is
+missing.
 
 ```bash
 # Debian / Ubuntu
@@ -34,7 +35,16 @@ sudo apt install build-essential
 
 # RHEL / Rocky / Alma / Fedora / Amazon Linux
 sudo dnf install gcc make glibc-devel
+
+# macOS on Apple silicon: clang and python3, then GNU make, installed as gmake
+xcode-select --install
+brew install make
 ```
+
+On macOS, build with `gmake`: the system make is 3.81, and the Makefile refuses
+it by name. The GPU and energy sections below do not apply there — the device
+backends look for Linux's OpenCL and CUDA libraries, and there is no RAPL
+counter to read.
 
 Clang works equally well and is fully tested — `make CC=clang`. Install
 `clang` (both families use that name).

@@ -443,6 +443,23 @@ port that cannot meet all three is not worth having:
   Whatever field carries that distinction has to reach the capture CSVs, or a
   cross-machine query cannot see it.
 
+**How the port meets them.** The seam is `include/vb_threads.h`, and the hash
+loop never calls into it; the review of #2 compared the two builds' disassembly
+and found that loop bit-identical. `check-pinning` skips only where `uname -s`
+is not Linux, and `can_pin` reaches the JSON and the sweep CSVs. CI holds the
+last two on every push: the Linux job requires `check-pinning` to run and pass,
+and the macOS job requires it to skip for the platform's reason and `can_pin`
+to arrive in the CSV.
+
+**Running the suite on Apple hardware found the weak point was the harness,
+not the port.** Three checks misbehaved on a Mac for reasons that had nothing
+to do with the code under test: one passed having injected nothing, because
+dyld ignores `LD_PRELOAD`; one skipped as if the machine had a single CPU,
+because there is no `nproc`; and one failed because `ulimit -v` cannot be set.
+The first two are the dangerous kind — a gate that passes without checking is
+as weak as one the subject can switch off — so each check now proves it ran, or
+skips on the platform and says why.
+
 **Windows remains out of scope**, unchanged and for the original reason.
 
 Finding 9 above is also now out of date in the direction that matters: the

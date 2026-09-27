@@ -10,6 +10,10 @@ make check                           # known-answer vectors + every kernel
 make config                          # what this toolchain can build
 ```
 
+On macOS: `xcode-select --install` for clang and python3, `brew install make`
+for GNU make, then `gmake` for `make` throughout. The system make is 3.81, and
+the Makefile refuses anything older than 4.3 by name.
+
 `make check` runs fifteen checks. The two that everything rests on are the
 published test vectors (RFC 1321, FIPS 180-4) against the scalar references,
 and every registered kernel against those references across message sizes,
@@ -157,6 +161,28 @@ Two traps in the obvious fix, both real:
 - `HWCAP` is not always self-consistent. `-cpu max,sve=off` clears `HWCAP_SVE`
   and leaves `HWCAP2_SVE2` set, which is impossible on real silicon since
   FEAT_SVE2 implies FEAT_SVE. Believe the weaker claim.
+
+## Testing on macOS
+
+Four things a check written on Linux takes for granted are false on a Mac, and
+each of them made a check pass or skip, rather than fail, when the port first
+ran there:
+
+- **There is no `nproc` and no `timeout`.** Count CPUs with
+  `nproc || getconf _NPROCESSORS_ONLN` — nproc first, since on Linux it
+  honours the affinity mask — and bound a run from inside the process rather
+  than with a wrapper.
+- **`LD_PRELOAD` is ignored.** dyld reads `DYLD_INSERT_LIBRARIES`, and a
+  library that replaces a libc function must use dyld's `__interpose` section:
+  under a two-level namespace each import is bound to the library it was
+  linked against, so a same-named definition replaces nothing. See
+  `tests/fail_pthread_create.c`.
+- **System binaries shed `DYLD_*` variables.** `/bin/sh`, `/usr/bin/env` and
+  `/usr/bin/python3` are protected, and whatever they launch runs without the
+  injected library. Set the variable on the command that runs the binary under
+  test, and have the check prove the injection happened.
+- **`ulimit -v` cannot be set.** A check that caps the address space to force
+  an allocation failure has to skip there — visibly, and only off Linux.
 
 ## Measuring on rented hardware
 
