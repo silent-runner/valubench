@@ -18,6 +18,11 @@ make                                  # or: make CC=clang
 ./build/valubench
 ```
 
+On a Mac with Apple silicon the Xcode command-line tools and Homebrew's GNU make
+are the whole requirement (`xcode-select --install`, `brew install make`); use
+`gmake` wherever this says `make`, because the system's make is too old to read
+the Makefile.
+
 GPU and energy support need a few more packages — see
 [docs/dependencies.md](docs/dependencies.md), which has copy-paste blocks for fresh
 Ubuntu/Debian and RHEL/Fedora/Amazon Linux cloud instances.
@@ -69,8 +74,8 @@ So the design is built around not fooling yourself:
   against an independent scalar reference and reduces them to a fingerprint that
   is invariant across lanes, streams, threads, devices and instruction sets. The
   same value comes back from Gracemont, Cascade Lake, Zen 5, Milan, Ice Lake,
-  Sapphire Rapids, Neoverse V1 and V2, an Intel iGPU, an A10, an A100 and two
-  H100s. A run that cannot verify produces no number.
+  Sapphire Rapids, Neoverse V1 and V2, Apple M4 Pro and M6, an Intel iGPU, an
+  A10, an A100 and two H100s. A run that cannot verify produces no number.
 - **Dispersion is reported, and a noisy result says so** — in the output and in
   the exit code.
 - **The environment is captured** with every result: CPU, ISA path actually
@@ -189,10 +194,11 @@ between them is evidence rather than a tautology.
 
 ## Status
 
-**Validated on nine CPU microarchitectures and five GPUs**, all producing the
+**Validated on eleven CPU microarchitectures and five GPUs**, all producing the
 same verification fingerprints: Gracemont, Cascade Lake, Zen 5 (server and
-desktop), Milan, Ice Lake-SP, Sapphire Rapids, Neoverse V1 and Neoverse V2, an
-Intel iGPU, an NVIDIA A10, an A100, two H100s and an RTX PRO 2000 Blackwell.
+desktop), Milan, Ice Lake-SP, Sapphire Rapids, Neoverse V1 and Neoverse V2,
+Apple M4 Pro and Apple M6, an Intel iGPU, an NVIDIA A10, an A100, two H100s and
+an RTX PRO 2000 Blackwell.
 Scalar, SSE2, AVX2, AVX-512, SHA-NI, NEON, SVE and SVE2 CPU kernels; device
 kernels for all three algorithms from one source, under OpenCL and, on NVIDIA
 with NVRTC, CUDA; resident, streaming and overlapped transfer; multi-device;
@@ -210,6 +216,11 @@ Known gaps, in the order they matter:
 - **CUDA has run on one card.** The backend is validated on the RTX PRO 2000
   (sm_120) only; CI compiles its kernels with NVRTC but has no NVIDIA driver to
   run them, and a second architecture is still owed.
+- **Apple silicon runs unpinned, and measures its CPU only.** macOS has no
+  thread-affinity API, so workers float across the chip's mixed core types and
+  dispersion is wider than on Linux; every result records `can_pin: false`.
+  It reads no energy counter or clock there either, and the device backends
+  look for `libOpenCL.so` and `libcuda.so`, which macOS does not have.
 - **Transfer figures in older captures are pageable memory.** Streaming now
   uploads from pinned memory by default; captures taken before that read
   pageable memory, which reached roughly half the link rate on an A10.

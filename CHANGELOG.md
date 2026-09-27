@@ -65,6 +65,20 @@ outside this repository while a durable format for them is decided.
 
 ### Added
 
+- **macOS on Apple silicon.** valubench builds, verifies and measures on
+  macOS, from a port by @jj5836 (#2). The threading calls POSIX does not
+  guarantee -- barriers, affinity and the affinity mask -- go through
+  `include/vb_threads.h`, which on Linux makes the same calls as before, and
+  the environment comes from sysctl. A Mac differs in two ways, and every
+  result says so: there is no thread-affinity API, so workers run unpinned
+  across the chip's mixed core types, and there is no energy counter or
+  cpufreq interface, so those phases skip. The JSON and the sweep CSV gain
+  `can_pin`, which separates a platform with nothing to pin from a pin that
+  was refused -- both read `pinned_cpus: 0`. `tools/run.sh` captures a Mac,
+  recording its core tiers, and CI builds and checks on two macOS images.
+  Build with GNU make 4.3 or newer (`brew install make`, then `gmake`); the
+  Makefile now says so rather than failing to parse under the system's 3.81.
+
 - **`--transfer overlap`: the sustained rate with uploads overlapping
   hashing.** Streaming uploaded each pass and then hashed it, so the link and
   the device took turns. Overlap uploads each pass on a second queue or stream

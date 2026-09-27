@@ -102,7 +102,8 @@ all. It separates two states that `pinned_cpus: 0` otherwise conflates: a pin
 that was attempted and refused, which is a defect, and a platform where there
 was nothing to attempt, which is a property. A consumer grouping results by
 whether pinning was even possible reads this rather than parsing the warning
-text. Always true on Linux.
+text. Always true on Linux; false on macOS, which has no affinity API. The
+sweep CSV carries it beside `pinned_cpus`.
 
 **`environment.pinned_cpus`** — the distinct CPUs the worker pool actually
 spread across. `threads_used` says how many threads were asked for and answers
