@@ -26,6 +26,14 @@
 #                  this workload excludes, because it does less work per hash.
 #                  Do not enable it.
 
+# GNU make 4.3 or newer. Before 4.3 a '#' inside a function call starts a
+# comment, the compile probes below contain one, and 3.81 -- what macOS ships --
+# stops with "unterminated call to function 'shell'", which names neither the
+# cause nor the fix. This runs before that line is read, and names both.
+ifneq ($(filter-out 3.% 4.0 4.0.% 4.1 4.1.% 4.2 4.2.%,$(MAKE_VERSION)),$(MAKE_VERSION))
+$(error GNU make 4.3 or newer is needed and this is $(MAKE_VERSION). On macOS: brew install make; then build with gmake)
+endif
+
 CC      ?= cc
 # embed_cl runs on the machine doing the building, not on the target, so it gets
 # its own compiler. It defaults to $(CC), which is right for a normal build and
