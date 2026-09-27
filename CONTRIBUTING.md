@@ -164,9 +164,8 @@ Two traps in the obvious fix, both real:
 
 ## Testing on macOS
 
-Four things a check written on Linux takes for granted are false on a Mac, and
-each of them made a check pass or skip, rather than fail, when the port first
-ran there:
+Five things a check written on Linux takes for granted are false on a Mac, and
+each of them has made a check pass or skip there, rather than fail:
 
 - **There is no `nproc` and no `timeout`.** Count CPUs with
   `nproc || getconf _NPROCESSORS_ONLN` — nproc first, since on Linux it
@@ -183,6 +182,12 @@ ran there:
   test, and have the check prove the injection happened.
 - **`ulimit -v` cannot be set.** A check that caps the address space to force
   an allocation failure has to skip there — visibly, and only off Linux.
+- **`objdump` prints Darwin's own syntax.** It is LLVM's, and for a Darwin
+  target it writes NEON as `add.4s v0, v1, v2` rather than
+  `add v0.4s, v1.4s, v2.4s`, and labels an object's first function `ltmp0`,
+  the section-start symbol at the same address. A check that reads
+  disassembly needs a control proving it can see what it looks for; see
+  `tests/check_scalar_is_scalar.sh`.
 
 ## Measuring on rented hardware
 

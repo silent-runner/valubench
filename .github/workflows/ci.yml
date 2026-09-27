@@ -291,9 +291,16 @@ jobs:
       # with no nproc, check-pinning took a twelve-core Mac for a single-CPU
       # machine and skipped before it reached the platform gate. And the
       # thread-failure check must have injected something -- on macOS it once
-      # passed with an injector that dyld never loaded.
+      # passed with an injector that dyld never loaded. The scalar-purity guard
+      # must run, not skip, and its control with it: Apple's objdump once had
+      # it passing while blind to NEON.
       - name: the port's skips must be the platform's, and injection must happen
         run: |
+          gmake check-scalar | tee scalar.log
+          grep -q '^  ok    scalar-purity  (' scalar.log \
+            || { echo "FAIL: the scalar-purity guard did not run"; exit 1; }
+          grep -q '^  ok    scalar-purity  control (.* neon kernels' scalar.log \
+            || { echo "FAIL: the scalar-purity control did not run"; exit 1; }
           gmake check-pinning | tee pin.log
           grep -q 'skip  pinning .*no thread affinity API on this platform' pin.log \
             || { echo "FAIL: check-pinning did not skip for the platform"; exit 1; }

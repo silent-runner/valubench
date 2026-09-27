@@ -466,8 +466,22 @@ check-nvrtc: $(BUILD)/test_nvrtc
 # disassemble with. ERE spells the optional `g` portably.
 OBJDUMP ?= $(shell echo $(CC) | sed -E 's/-[0-9]+$$//; s/g?cc$$/objdump/; s/clang/objdump/')
 
-check-scalar: $(BUILD)/kernel_scalar.o
+# The guard's own control: a baseline vector object must read as vector code,
+# or the register spellings the guard looks for are not the ones this
+# toolchain's objdump prints. Apple's objdump prints NEON in a syntax they once
+# missed, and the guard passed on every Mac while reading little but loads and
+# stores.
+SCALAR_CONTROL := $(firstword $(filter sse2 neon,$(KERNELS)))
+
+check-scalar: $(BUILD)/kernel_scalar.o \
+              $(if $(SCALAR_CONTROL),$(BUILD)/kernel_$(SCALAR_CONTROL).o)
 	@sh tests/check_scalar_is_scalar.sh $(BUILD)/kernel_scalar.o $(OBJDUMP)
+ifneq ($(SCALAR_CONTROL),)
+	@sh tests/check_scalar_is_scalar.sh --control $(SCALAR_CONTROL) \
+	    $(BUILD)/kernel_$(SCALAR_CONTROL).o $(OBJDUMP)
+else
+	@echo "  skip  scalar-purity  control (no SSE2 or NEON kernels in this build)"
+endif
 
 $(BUILD)/test_checkpoints: $(BUILD)/test_checkpoints.o $(BUILD)/workload.o \
                            $(BUILD)/algorithm.o $(REF_OBJS)
