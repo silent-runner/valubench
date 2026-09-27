@@ -6,9 +6,12 @@
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
- * Three things here are not portable, and each is isolated so the Linux path
- * stays byte-for-byte what it was and every other platform gets a defined
- * fallback instead of a build break:
+ * Three things here are not portable, and each is isolated so Linux makes
+ * exactly the calls it made before and every other platform gets a defined
+ * fallback instead of a build break. "The same calls" is not "the same object
+ * code": pin_self now inlines into its callers, so bench.o differs. What
+ * design.md finding 10 holds to bit-identity is the hash loop, run_slice,
+ * and nothing in this file is called from it.
  *
  *   - Barriers are an *optional* POSIX feature (_POSIX_BARRIERS). glibc has
  *     them; several libcs do not. The fallback is a mutex and condition
@@ -17,9 +20,15 @@
  *     slow one has left the previous one would sail straight through, and in
  *     this harness that means a worker starting its slice before the driver
  *     has set `reps`: a plausible wrong number, the one thing this benchmark
- *     must never produce. The barrier is used only to release and collect
- *     workers around a timed region, never inside one, so its cost never
- *     lands in a measurement.
+ *     must never produce.
+ *
+ *     Both waits are inside the timed interval. pool_run reads the clock
+ *     before releasing the workers and again after collecting them, so every
+ *     sample includes two barrier crossings. That cost is paid once per
+ *     sample, not once per hash, which keeps it small beside a sample sized
+ *     to --time-ms -- but it is not zero, and the fallback pays more of it
+ *     than a futex barrier does, because each woken waiter must retake the
+ *     mutex on its way out.
  *
  *   - Thread pinning is not standard at all. Linux has the GNU extension
  *     pthread_setaffinity_np; there is no portable equivalent. vb_thread_pin
