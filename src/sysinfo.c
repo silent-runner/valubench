@@ -239,6 +239,9 @@ static int dmi_field(const char *name, char *out, size_t n)
     return read_line_file(path, out, n);
 }
 
+/* x86 only, like its one caller: the flag does not exist elsewhere, and an
+   unconditional definition warned on every other build. */
+#if defined(__x86_64__) || defined(__i386__)
 static int cpuinfo_has_hypervisor_flag(void)
 {
     FILE *f = fopen("/proc/cpuinfo", "r");
@@ -260,6 +263,7 @@ static int cpuinfo_has_hypervisor_flag(void)
     fclose(f);
     return found;
 }
+#endif
 
 /*
  * Pure, so the shapes that matter can be tested without owning the machines
