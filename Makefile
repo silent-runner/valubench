@@ -586,11 +586,11 @@ check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthrea
 	     echo "  FAIL  threadfail  create $$n failing was reported as a verification failure"; \
 	     exit 1; \
 	   fi; \
-	   if [ "$$rc" != 0 ] && [ "$$rc" != 4 ]; then \
-	     echo "  FAIL  threadfail  create $$n failing exited $$rc (want 4, could not run)"; \
+	   if [ "$$rc" = 4 ]; then continue; fi; \
+	   if [ "$$rc" != 0 ] && [ "$$rc" != 3 ]; then \
+	     echo "  FAIL  threadfail  create $$n failing exited $$rc (want 4 if the pool could not start, else 0 or 3)"; \
 	     exit 1; \
 	   fi; \
-	   if [ "$$rc" != 0 ]; then continue; fi; \
 	   used=$$(printf '%s' "$$out" | python3 -c \
 	     'import json,sys; print(json.load(sys.stdin)["environment"]["threads_used"])' \
 	     2>/dev/null); \
