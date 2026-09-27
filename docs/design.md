@@ -447,3 +447,14 @@ port that cannot meet all three is not worth having:
 
 Finding 9 above is also now out of date in the direction that matters: the
 AVX-512 path has executed on three parts, and validation hardware arrived.
+
+## Decided against
+
+- **Caching reference checksums across runs.** The reference ladder and
+  parallel verification made recomputing them a small part of a session, and a
+  cached oracle is a correctness gate that no longer checks. Revisit only if a
+  workload makes verification expensive again.
+- **Sweeping inside the binary.** A process per point costs about one percent
+  of a session, against changing the JSON contract that `docs/schema.md`
+  documents and two tools consume. One consequence to know: every point starts
+  fresh, so each tunes its own device launch.
