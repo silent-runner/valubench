@@ -230,7 +230,7 @@ Known gaps, in the order they matter:
 | [src/kernels/cpu/](src/kernels/cpu/) | CPU kernels, one translation unit per ISA — see its [README](src/kernels/cpu/README.md) for how to add one |
 | [src/kernels/cpu/md5_kernel_impl.h](src/kernels/cpu/md5_kernel_impl.h) | The multi-way kernel, written once |
 | [src/kernels/gpu/](src/kernels/gpu/) | Device kernels: one core per hash, compiled under OpenCL or CUDA through a dialect header |
-| [src/device/](src/device/) | What every device API shares: program composition, launch geometry, repeats, the partial fold, the device list, and the per-vendor steer table |
+| [src/device/](src/device/) | What every device API shares: program composition, the device's capacity and a launch geometry within it, repeats, the partial fold, the device list, and the per-vendor steer table |
 | [src/opencl/](src/opencl/) | The OpenCL backend — loader, compile, upload, launch. No hash functions |
 | [src/cuda/](src/cuda/) | The CUDA backend, NVRTC-compiled at run time — the same shape as the OpenCL one |
 | [src/bench.c](src/bench.c) | Validation, autotune, timing, statistics |

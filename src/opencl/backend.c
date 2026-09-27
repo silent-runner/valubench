@@ -320,7 +320,8 @@ static int ocl_alloc(vb_dev_ctx *c, const void *slice, size_t corpus_bytes,
                 (double) corpus_bytes / 1048576.0, vb_ocl_strerror(err));
         return -1;
     }
-    m->d_partial = cl->CreateBuffer(m->context, CL_MEM_WRITE_ONLY,
+    /* Read and written: the capacity probe keeps its counters here. */
+    m->d_partial = cl->CreateBuffer(m->context, CL_MEM_READ_WRITE,
                                     partial_bytes, NULL, &err);
     if (!m->d_partial) {
         set_err(c, "partial buffer: %s", vb_ocl_strerror(err));
@@ -441,6 +442,20 @@ static uint64_t event_ns(const vb_ocl *cl, cl_event *ev)
         *ev = NULL;
     }
     return ns;
+}
+
+static int ocl_write_partials(vb_dev_ctx *c, const void *src, size_t bytes)
+{
+    const vb_ocl *cl = vb_ocl_api();
+    ocl_impl *m = c->impl;
+    cl_int err = cl->EnqueueWriteBuffer(m->queue, m->d_partial, CL_TRUE, 0,
+                                        bytes, (void *) (uintptr_t) src, 0,
+                                        NULL, NULL);
+    if (err != CL_SUCCESS) {
+        set_err(c, "writing partials: %s", vb_ocl_strerror(err));
+        return -1;
+    }
+    return 0;
 }
 
 static int ocl_read(vb_dev_ctx *c, size_t bytes)
@@ -657,6 +672,7 @@ const vb_dev_backend vb_opencl_backend = {
     .pin_staging = ocl_pin_staging,
     .launch      = ocl_launch,
     .read        = ocl_read,
+    .write_partials = ocl_write_partials,
     .pipe_open   = ocl_pipe_open,
     .pipe_enqueue = ocl_pipe_enqueue,
     .pipe_wait   = ocl_pipe_wait,

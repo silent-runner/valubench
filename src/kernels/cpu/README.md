@@ -234,13 +234,15 @@ instructions the running CPU lacks and fault before it can check.
 ## The device kernels
 
 Each hash is one **algorithm core**, `src/kernels/gpu/<alg>_device_impl.h`, in no
-particular API's language. A program is three embedded files concatenated at run
-time: a dialect header, the primitives, and the core.
+particular API's language. A program is four embedded files concatenated at run
+time: a dialect header, the primitives, the capacity probe, and the core.
 
 ```
     dialect_opencl.h | dialect_cuda.h     address spaces, work-item indices,
-                                          barrier, scratch, constant tables
+                                          barrier, scratch, constant tables,
+                                          two atomics
   + device_primitives.h                   how rotate, Ch and Maj are spelled
+  + device_capacity.h                     how many work-groups fit at once
   + <alg>_device_impl.h                   constants and every step, written out
 ```
 
@@ -344,7 +346,7 @@ initialiser has no such limit and stays warning-clean under `-Wpedantic`.
 
 Device kernels live beside this directory in `../gpu/`: one core per algorithm
 (`md5_device_impl.h`, `sha1_device_impl.h`, `sha512_device_impl.h`), the two
-dialect headers and `device_primitives.h`. The host side that runs them --
+dialect headers, `device_primitives.h` and `device_capacity.h`. The host side that runs them --
 context, upload, launch, readback -- is the shared device layer in
 `src/device/` with one backend per API in `src/opencl/` and `src/cuda/`, and
 knows nothing about hash functions.

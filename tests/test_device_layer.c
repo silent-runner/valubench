@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
- * Three things every device run leans on that need no hardware to be wrong:
+ * Four things every device run leans on that need no hardware to be wrong:
  * how a slice of the corpus is cut into chunks, how many chunks the overlap
- * pipeline takes when it is not told, and the translation that lets the CUDA
+ * pipeline takes when it is not told, how many waves a sweep takes against
+ * what the device holds at once, and the translation that lets the CUDA
  * driver run NVIDIA OpenCL's PTX. No CI runner has a GPU, so this is the only
  * place CI sees them.
  *
@@ -77,6 +78,20 @@ static void check_chunks(const char *what, uint64_t n_groups,
         return;
     }
     expect(1, what);
+}
+
+/* ---- waves per sweep ----------------------------------------------------- */
+
+/* Only work-items with work count -- one per lane of each group -- and a
+   grid that fits is one wave: the result's word that the working set is the
+   corpus. */
+static void check_waves(const char *what, size_t global, uint64_t n_groups,
+                        unsigned lanes, size_t capacity, unsigned want)
+{
+    unsigned got = vb_dev_waves(global, n_groups, lanes, capacity);
+    char msg[160];
+    snprintf(msg, sizeof msg, "%s: %u waves, want %u", what, got, want);
+    expect(got == want, msg);
 }
 
 /* ---- OpenCL's PTX for the CUDA driver ----------------------------------- */
@@ -187,6 +202,15 @@ int main(void)
     check_chunks("memory unknown: one chunk", 32768, 8192, 0, 1);
     check_chunks("never more chunks than groups", 3, GiB, GiB, 3);
     check_chunks("never more than 256", 100000, MiB, GiB, 256);
+
+    /* The RTX PRO 2000's md5/ocl-s1 held 43,520; 1,114,112 was the grid
+       that read 256 MiB out of L2. */
+    check_waves("grid at capacity", 43520, 65536, 64, 43520, 1);
+    check_waves("grid below capacity", 8704, 65536, 64, 43520, 1);
+    check_waves("one work-item over", 43521, 65536, 64, 43520, 2);
+    check_waves("the 15.3 G grid", 1114112, 65536, 64, 43520, 26);
+    check_waves("idle work-items do not count", 1114112, 13, 64, 43520, 1);
+    check_waves("capacity unknown", 1114112, 65536, 64, 0, 0);
 
     check_translation();
 

@@ -36,7 +36,7 @@ The version number moves when a field is removed or its meaning changes.
 | `result` | `unit`, `direction`, `median`, `min`, `max`, `mean`, `stddev`, `cov_percent`, `stable`, `cov_threshold_percent`, `message_bytes_per_second`, `compressions_per_second`, `samples`, `total_hashes`, `total_seconds` |
 | `verification` | `verified`, `checksum`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
-| `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `kernel_busy_fraction`, `transfer_mode` (`resident`, `stream` or `overlap`), with `overlap` also `pipeline_chunks` (the count used) and `overlap_efficiency`, in either streaming mode `host_memory` and the per-pass transfer figures, and where NVML answers `gpu_clock_mhz` (`first`, `last`, `min`, `max` SM clock over the timed samples, and `samples`), `gpu_temp_c` and `gpu_throttle_reasons` |
+| `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `concurrent_work_items` and `waves_per_sweep`, `kernel_busy_fraction`, `transfer_mode` (`resident`, `stream` or `overlap`), with `overlap` also `pipeline_chunks` (the count used) and `overlap_efficiency`, in either streaming mode `host_memory` and the per-pass transfer figures, and where NVML answers `gpu_clock_mhz` (`first`, `last`, `min`, `max` SM clock over the timed samples, and `samples`), `gpu_temp_c` and `gpu_throttle_reasons` |
 | `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `virtualized`, temperature fields |
 | `energy` | `available`, and either `reason` or the figures: `cpu_package_joules`/`watts`, `gpu_joules`/`watts`, `hashing_joules`/`watts` and `hashes_per_joule` (or `hashing_unmeasured`), `machine_joules` and `hashes_per_joule_machine`, and `sources`, each with `counted` |
 | `warnings` | array of strings; conditions that make the number less trustworthy |
@@ -66,6 +66,17 @@ whether steering was on at all. `geometry_source` is `pinned` when
 `--device-geometry` chose the launch and `tuned` otherwise; two results are
 only comparable as compiled kernels at the same `global_work` and
 `local_work`.
+
+**`concurrent_work_items` is how many work-items of this kernel the device
+held at once** at the launch's group size, measured by the probe every device
+kernel carries, and 0 if it could not be measured. `waves_per_sweep` is the
+work-items that had work over that, rounded up: 1 means every repeat of the
+sweep re-read the whole corpus, so the working set is the one named. More --
+only a pinned grid larger than the device, or an unmeasured capacity -- means
+each repeat re-read one wave's share, possibly from a cache the corpus does
+not fit, and the result says so; 0 means unknown. Results from before
+2026-09-27 lack both fields, and a resident one at a corpus larger than the
+device's L2 may be such a result.
 
 **`energy.hashes_per_joule` divides by the hardware that hashed** -- the
 cards the run used, matched by PCI address, and the CPU package when the CPU
@@ -195,6 +206,7 @@ hash.
 `backend`, `device_compiler`, `device_compiler_version`, `compile_mode`,
 `device_driver`, `platform`, `pci_address`, `primitives`, `steers`,
 `geometry_source`, `global_work`, `local_work`, `sweeps_per_launch`,
+`concurrent_work_items`, `waves_per_sweep`,
 `transfer_mode`, `host_memory`, `pipeline_chunks`, `overlap_efficiency`,
 `gpu_mhz_min`, `gpu_mhz_max`, `gpu_throttle`, `kernel_busy_pct`,
 `transfer_busy_pct`,

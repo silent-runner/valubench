@@ -268,6 +268,13 @@ what make the number trustworthy:
   compute without amplifying transfer, so any other value would inflate exactly
   the side of the ratio being measured. This is a correctness constraint, not a
   tuning choice.
+- **And when resident, repeats need a grid the device holds at once.** They
+  run inside each work-item, so a larger grid runs in waves that each repeat
+  only their own share of the corpus -- from cache, once the share fits one.
+  The tuner is capped at a capacity each kernel measures on the device; on an
+  RTX PRO 2000 the uncapped grid had reported a 256 MiB corpus at L2 speed,
+  several times what its memory can deliver, and verified. Also a correctness
+  constraint.
 - **Compare algorithms at 64-byte messages.** It is the one length where all
   three store exactly 128 bytes per padded message — MD5 and SHA-1 spill into a
   second 64-byte block, SHA-512 still fits one 128-byte block — so the transfer

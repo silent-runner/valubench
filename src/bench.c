@@ -1068,6 +1068,20 @@ static int measure_device(const vb_kernel *k, const vb_config *cfg,
     out->device_global = ctx[0].global_size;
     out->device_local = ctx[0].local_size;
     out->device_repeats = ctx[0].repeats;
+    out->device_capacity = ctx[0].capacity;
+    /* Waves per sweep, the most on any device, or 0 if any is unknown: more
+       than one means a repeat re-reads a wave's share, not the corpus. */
+    out->device_waves = 0;
+    for (int i = 0; i < n_use; i++) {
+        unsigned w = vb_dev_waves(ctx[i].global_size, ctx[i].n_groups,
+                                  ctx[i].lanes, ctx[i].capacity);
+        if (w == 0) {
+            out->device_waves = 0;
+            break;
+        }
+        if (w > out->device_waves)
+            out->device_waves = w;
+    }
     out->transfer = cfg->transfer;
 
     /* Bytes crossing the link per pass: every device uploads its own slice. */

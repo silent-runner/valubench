@@ -52,20 +52,29 @@ static const vb_dev_program *program_for(vb_alg_id alg)
     return NULL;
 }
 
-/* Dialect, primitives, core: the same composition for every backend, so the
-   core is the same text whichever API compiles it. Caller frees. */
+/* Dialect, primitives, capacity probe, core: the same composition for every
+   backend, so the core is the same text whichever API compiles it. Caller
+   frees. */
 static char *compose(vb_dialect d, const char *core)
 {
-    const char *dialect = d == VB_DIALECT_CUDA ? VB_DEV_DIALECT_CUDA
-                                               : VB_DEV_DIALECT_OPENCL;
-    size_t a = strlen(dialect), b = strlen(VB_DEV_DEVICE_PRIMITIVES),
-           c = strlen(core);
-    char *s = malloc(a + b + c + 1);
+    const char *part[4] = {
+        d == VB_DIALECT_CUDA ? VB_DEV_DIALECT_CUDA : VB_DEV_DIALECT_OPENCL,
+        VB_DEV_DEVICE_PRIMITIVES,
+        VB_DEV_DEVICE_CAPACITY,
+        core,
+    };
+    size_t len[4], total = 0;
+    for (int i = 0; i < 4; i++)
+        total += len[i] = strlen(part[i]);
+    char *s = malloc(total + 1);
     if (!s)
         return NULL;
-    memcpy(s, dialect, a);
-    memcpy(s + a, VB_DEV_DEVICE_PRIMITIVES, b);
-    memcpy(s + a + b, core, c + 1);
+    char *p = s;
+    for (int i = 0; i < 4; i++) {
+        memcpy(p, part[i], len[i]);
+        p += len[i];
+    }
+    *p = '\0';
     return s;
 }
 
@@ -129,16 +138,32 @@ void vb_dev_slice(uint64_t total_groups, int n, int i,
    synchronisation overhead is noise, short enough to stay responsive. */
 #define VB_DEV_TARGET_LAUNCH_NS 20000000ull      /* 20 ms */
 
+/* Work-items per compute unit: more than any device holds at once (2,560 is
+   the most known, on AMD), so a launch this size always runs in waves. */
+#define VB_DEV_PER_CU 8192u
+
+/*
+ * Reads the capacity probe's first work-groups make while the rest of the
+ * first wave arrives (device_capacity.h). A GPU fills itself in microseconds
+ * and every read is a trip to L2, so a few thousand is ample; a CPU device
+ * reads from its own cache in nanoseconds and starts its threads far more
+ * slowly. Too few undercounts, which only costs speed.
+ */
+#define VB_DEV_PROBE_SPIN_GPU (1u << 13)
+#define VB_DEV_PROBE_SPIN_CPU (1u << 22)
+
 /*
  * Hard ceiling on work-items. Past one per corpus group there is nothing left
  * to stride over, but a small corpus on a large device still wants every
  * compute unit busy, so allow a generous multiple of nominal parallelism.
- * Rounded up to VB_DEV_MAX_LOCAL so every candidate geometry divides it.
+ * Rounded up to VB_DEV_MAX_LOCAL so every candidate geometry divides it. It
+ * sizes the partial buffers; what the tuner launches is also capped by what
+ * the device holds at once.
  */
 static size_t max_global(const vb_dev_ctx *c)
 {
     size_t by_corpus = (size_t) c->n_groups * c->lanes;
-    size_t by_device = (size_t) c->dev.compute_units * 8192u;
+    size_t by_device = (size_t) c->dev.compute_units * VB_DEV_PER_CU;
     size_t cap = by_corpus > by_device ? by_corpus : by_device;
 
     size_t unit = VB_DEV_MAX_LOCAL > c->lanes ? VB_DEV_MAX_LOCAL : c->lanes;
@@ -182,16 +207,72 @@ static int geometry_ok(const vb_dev_ctx *c, size_t global, size_t local)
 }
 
 /*
+ * The most work-items of this kernel the device holds at once, in groups of
+ * `local`, or 0 if that could not be measured. Every core carries the probe
+ * (device_capacity.h), which says why a launch must not exceed this: a larger
+ * grid runs in waves, and each wave repeats its sweep over only its own share
+ * of the corpus, from whatever cache that share fits in. The probe launches
+ * with the scratch a hash launch of this group size gets, since that too
+ * bounds how many groups fit.
+ */
+static size_t measure_capacity(vb_dev_ctx *c, size_t local)
+{
+    static const uint32_t zero[3] = { 0, 0, 0 };
+    size_t unit = local > c->lanes ? local : c->lanes;
+    size_t cu = c->dev.compute_units ? c->dev.compute_units : 1;
+    size_t global = ((cu * VB_DEV_PER_CU + unit - 1) / unit) * unit;
+    uint64_t groups = global / local;
+
+    size_t saved_global = c->global_size, saved_local = c->local_size;
+    uint64_t saved_partials = c->n_partials;
+    uint32_t saved_repeats = c->repeats;
+    uint32_t count[3] = { 0, 0, 0 };
+    int ok = 0;
+
+    c->global_size = global;
+    c->local_size = local;
+    c->n_partials = groups;
+    c->repeats = 0;                       /* the probe, not a hash launch */
+    if (c->be->write_partials(c, zero, sizeof zero) == 0 &&
+        vb_dev_ctx_enqueue(c, c->dev.is_cpu ? VB_DEV_PROBE_SPIN_CPU
+                                            : VB_DEV_PROBE_SPIN_GPU) == 0 &&
+        c->be->read(c, sizeof count) == 0) {
+        memcpy(count, c->partials, sizeof count);
+        /* Every work-group counted in and out, or the answer means nothing. */
+        ok = count[0] == groups && count[1] == groups && count[2] > 0;
+    }
+    c->global_size = saved_global;
+    c->local_size = saved_local;
+    c->n_partials = saved_partials;
+    c->repeats = saved_repeats;
+    c->error[0] = '\0';
+    return ok ? (size_t) count[2] * local : 0;
+}
+
+unsigned vb_dev_waves(size_t global, uint64_t n_groups, unsigned lanes,
+                      size_t capacity)
+{
+    uint64_t busy = (uint64_t) n_groups * lanes;      /* work-items with work */
+    if ((uint64_t) global < busy)
+        busy = global;
+    if (capacity == 0)
+        return 0;
+    return (unsigned) ((busy + capacity - 1) / capacity);
+}
+
+/*
  * Pick the launch geometry by measurement rather than by formula. The right
  * number of work-items is a device property, not a workload one; guessing
  * wrong is expensive -- an early version launched one work-item per message,
- * tying occupancy to --working-set-kb, and cost 1.8x on an iGPU.
+ * tying occupancy to --working-set-kb, and cost 1.8x on an iGPU. Every
+ * candidate is at most what the device holds at once, and the largest
+ * candidate is exactly that.
  */
 static int tune_geometry(vb_dev_ctx *c)
 {
     const size_t cap = max_global(c);
     double best = -1.0;
-    size_t best_global = 0, best_local = 0;
+    size_t best_global = 0, best_local = 0, best_held = 0;
     size_t floor_local, ceiling;
 
     c->repeats = 1;
@@ -210,12 +291,24 @@ static int tune_geometry(vb_dev_ctx *c)
         if (unit % local || unit % c->lanes)
             continue;
 
+        /* Unmeasured, the grid is capped as it always was, and the result
+           says the capacity is unknown. */
+        size_t held = measure_capacity(c, local);
+        size_t top = cap;
+        if (held) {
+            size_t fit = held / unit * unit;
+            if (fit < unit)
+                fit = unit;
+            if (fit < top)
+                top = fit;
+        }
+
         for (size_t mult = 1; ; mult <<= 2) {
             size_t global = local * mult * c->dev.compute_units;
             global = ((global + unit - 1) / unit) * unit;
             int last = 0;
-            if (global >= cap) {
-                global = cap;
+            if (global >= top) {
+                global = top;
                 last = 1;
             }
 
@@ -240,6 +333,7 @@ static int tune_geometry(vb_dev_ctx *c)
                 best = rate;
                 best_global = global;
                 best_local = local;
+                best_held = held;
             }
             if (last)
                 break;
@@ -255,6 +349,7 @@ static int tune_geometry(vb_dev_ctx *c)
     c->global_size = best_global;
     c->local_size = best_local;
     c->n_partials = best_global / best_local;
+    c->capacity = best_held;
     return 0;
 }
 
@@ -447,6 +542,9 @@ int vb_dev_ctx_init(vb_dev_ctx *c, const vb_dev_backend *be,
         c->local_size = l;
         c->n_partials = g / l;
         c->geometry_pinned = 1;
+        /* Measured but not enforced: a pinned grid past it is a control
+           someone asked for, and the result says it ran in waves. */
+        c->capacity = measure_capacity(c, l);
     } else if (tune_geometry(c) != 0) {
         fail_keep_error(c);
         return -1;

@@ -604,6 +604,19 @@ static uint64_t elapsed_ns(const vb_cuda *cu, vb_CUevent a, vb_CUevent b)
     return (uint64_t) ((double) ms * 1e6);
 }
 
+static int cu_write_partials(vb_dev_ctx *c, const void *src, size_t bytes)
+{
+    const vb_cuda *cu = vb_cuda_api();
+    cu_impl *m = c->impl;
+    if (enter(c) != 0)
+        return -1;
+    /* On the kernels' stream, so the next launch sees it. */
+    CU_CHECK(c, cu->MemcpyHtoDAsync(m->d_partial, src, bytes, m->stream),
+             "writing partials");
+    CU_CHECK(c, cu->StreamSynchronize(m->stream), "cuStreamSynchronize");
+    return 0;
+}
+
 static int cu_read(vb_dev_ctx *c, size_t bytes)
 {
     const vb_cuda *cu = vb_cuda_api();
@@ -776,6 +789,7 @@ const vb_dev_backend vb_cuda_backend = {
     .pin_staging = cu_pin_staging,
     .launch      = cu_launch,
     .read        = cu_read,
+    .write_partials = cu_write_partials,
     .pipe_open   = cu_pipe_open,
     .pipe_enqueue = cu_pipe_enqueue,
     .pipe_wait   = cu_pipe_wait,

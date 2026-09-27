@@ -155,6 +155,8 @@ CSV_COLUMNS = [
     "global_work",
     "local_work",
     "sweeps_per_launch",
+    "concurrent_work_items",
+    "waves_per_sweep",
     # results
     "hashes_per_sec",
     "hashes_per_sec_min",
@@ -670,6 +672,11 @@ def _row_from_result(d, status, point=None):
         "global_work": dev.get("global_work", ""),
         "local_work": dev.get("local_work", ""),
         "sweeps_per_launch": dev.get("corpus_sweeps_per_launch", ""),
+        # What the device holds at once, and how many waves of it one sweep
+        # took: past one, each repeat re-read only a wave's share of the
+        # corpus, and the point's working set is not the one it names.
+        "concurrent_work_items": dev.get("concurrent_work_items", ""),
+        "waves_per_sweep": dev.get("waves_per_sweep", ""),
         "hashes_per_sec": "%.6g" % r["median"],
         "hashes_per_sec_min": "%.6g" % r["min"],
         "compressions_per_sec": "%.6g" % r["compressions_per_second"],

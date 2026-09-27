@@ -5,11 +5,11 @@
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Same construction as md5_device_impl.h, which describes how a program is
- * assembled: a dialect header, device_primitives.h, then this. LANES and
- * STREAMS arrive as -D so one source specialises into every variant, and the
- * constants and all 80 steps are written out below from FIPS 180-4. The work
- * decomposition is identical to the CPU template, so the XOR checksum matches
- * it bit for bit.
+ * assembled: a dialect header, device_primitives.h, device_capacity.h, then
+ * this. LANES and STREAMS arrive as -D so one source specialises into every
+ * variant, and the constants and all 80 steps are written out below from FIPS
+ * 180-4. The work decomposition is identical to the CPU template, so the XOR
+ * checksum matches it bit for bit.
  *
  * The one structural difference from MD5 is the message schedule, and it costs
  * registers. MD5 permutes sixteen message words, so md5_device_impl.h can
@@ -102,6 +102,15 @@ VB_KERNEL vb_sha1(VB_GLOBAL const vb_u32 *corpus,
                   VB_SCRATCH_PARAM(vb_u32, scratch))
 {
     VB_SCRATCH_DECL(vb_u32, scratch)
+
+    /* A capacity probe, not a hash launch: see md5_device_impl.h. */
+    if (repeats == 0) {
+        if (VB_LOCAL_ID() == 0)
+            VB_CAPACITY_PROBE((volatile VB_GLOBAL vb_u32 *) partials,
+                              iterations);
+        VB_BARRIER();
+        return;
+    }
 
     const size_t gid  = VB_GLOBAL_ID();
     const size_t lid  = VB_LOCAL_ID();

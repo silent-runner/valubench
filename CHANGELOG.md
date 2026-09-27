@@ -113,6 +113,23 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **A resident device result could come from cache while claiming a larger
+  working set.** Each launch repeats its corpus sweep inside every work-item,
+  and a launch grid larger than the device holds at once runs in waves, each
+  repeating only its own share of the corpus; once a wave's share fit in a
+  cache, every repeat after the first was served from it. On an RTX PRO 2000 a
+  256 MiB corpus on a large grid reported several times what the card's memory
+  can deliver, from L2, and a 16 MiB one ran from L1; the checksum held,
+  because every repeat was really hashed. Every kernel now measures how many
+  of its work-items the device holds at once -- a probe built into the kernel,
+  the same under OpenCL and CUDA, which agrees with CUDA's occupancy query on
+  every kernel and group size -- and the tuner never launches more. A grid at
+  that size ran as fast as any honest one. `--device-geometry` still takes a
+  larger grid, and the result warns that its working set is not the corpus.
+  The JSON and the sweep CSV gain `concurrent_work_items` and
+  `waves_per_sweep`. Resident results at a corpus larger than the device's L2
+  from earlier captures should be treated as suspect; streaming and overlap
+  launch one sweep and were never affected.
 - **`sweep.py` flagged points as duplicate working sets when only their size
   matched**, so two transfer modes, kernels or compile modes over one corpus
   were reported as collapsed onto each other. It now compares everything the
