@@ -565,6 +565,11 @@ print(e["threads_used"], e["pinned_cpus"], int(e.get("can_pin", True)))' 2>/dev/
 check-contract: need-python3 $(BUILD)/valubench
 	@sh tests/check_output_contract.sh $(BUILD)/valubench .
 
+# The variable the target's loader reads to inject a library ahead of libc.
+# Taken from the compiler's target, as ARCH is, so a Linux cross build run under
+# qemu still gets LD_PRELOAD. macOS ignores LD_PRELOAD entirely.
+PRELOAD_VAR := $(if $(findstring darwin,$(shell $(CC) -dumpmachine 2>/dev/null)),DYLD_INSERT_LIBRARIES,LD_PRELOAD)
+
 $(BUILD)/fail_pthread_create.so: tests/fail_pthread_create.c
 	$(CC) $(CFLAGS) -fPIC -shared -o $@ $< -ldl
 
@@ -575,24 +580,37 @@ $(BUILD)/test_thread_failure: tests/test_thread_failure.c $(BUILD)/workload.o \
 # A thread that fails to start must not corrupt the reference. Injected at each
 # index in turn, because the defect this covers only appears when the failure is
 # not the last one -- a contiguous prefix of successes was always handled.
+#
+# The injector announces each refusal, and the check requires the announcement:
+# on macOS the preload was LD_PRELOAD, which dyld ignores, so every run
+# succeeded untouched and this passed having injected nothing. Exit 142 is the
+# injector's own 60 s watchdog (128 + SIGALRM), which replaced GNU timeout --
+# macOS ships none.
 check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthread_create.so \
                   $(BUILD)/valubench
 	@for n in 1 2 3 4; do \
-	   LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
+	   $(PRELOAD_VAR)=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
 	     $(BUILD)/test_thread_failure > $(BUILD)/.tf.log 2>&1 || \
 	     { echo "  FAIL  thread-failure with create $$n failing"; \
 	       cat $(BUILD)/.tf.log; exit 1; }; \
+	   grep -q '^fail_pthread_create: refused' $(BUILD)/.tf.log || \
+	     { echo "  FAIL  threadfail  create $$n was never refused: the injector did not load, so nothing was tested"; \
+	       exit 1; }; \
 	 done; \
 	 EXP=$$($(BUILD)/valubench --reference-ladder 1 --algorithm md5 \
 	          --message-bytes 55 --working-set-kb 1024 \
 	        | grep -o '"checksum": "[0-9a-f]*"' | cut -d'"' -f4); \
+	 refused=0; \
 	 for n in 1 2 3 4 5 6; do \
-	   out=$$(LD_PRELOAD=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
-	          timeout -s KILL 60 \
+	   out=$$($(PRELOAD_VAR)=$(BUILD)/fail_pthread_create.so VB_FAIL_CREATE=$$n \
 	          $(BUILD)/valubench --json --kernel md5/scalar-s1 --threads 4 \
-	          --expect $$EXP --samples 2 --time-ms 20 --warmup-ms 20 2>/dev/null) \
+	          --expect $$EXP --samples 2 --time-ms 20 --warmup-ms 20 \
+	          2>$(BUILD)/.tf.err) \
 	         && rc=0 || rc=$$?; \
-	   if [ "$$rc" = 137 ] || [ "$$rc" = 124 ]; then \
+	   if grep -q '^fail_pthread_create: refused' $(BUILD)/.tf.err; then \
+	     refused=$$((refused + 1)); \
+	   fi; \
+	   if [ "$$rc" = 142 ]; then \
 	     echo "  FAIL  threadfail  create $$n hung; a stalled pool is not a pass"; \
 	     exit 1; \
 	   fi; \
@@ -612,7 +630,11 @@ check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthrea
 	     echo "  FAIL  threadfail  a pool of $$used reported a result (wanted 4)"; \
 	     exit 1; \
 	   fi; \
-	 done
+	 done; \
+	 if [ "$$refused" = 0 ]; then \
+	   echo "  FAIL  threadfail  no run of valubench had a create refused: the injector did not load"; \
+	   exit 1; \
+	 fi
 	 $(BUILD)/test_thread_failure | sed 's/^/  ok    threadfail  /'
 
 check-checkpoints: $(BUILD)/test_checkpoints
