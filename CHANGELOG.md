@@ -141,6 +141,16 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **The scalar-purity guard was blind on macOS.** Apple's objdump prints NEON
+  as `add.4s v0, v1, v2`, a spelling the guard's register patterns did not
+  match, so it counted little but loads and stores -- enough to read some NEON
+  kernels as scalar. It also labels an object's first function `ltmp0`, so
+  `md5/scalar-s1` was never inspected. Nothing the guard passed there was
+  wrong, since Apple clang does not vectorise the scalar kernels, but it could
+  not have said otherwise. It now reads both syntaxes, resolves every function
+  through the symbol table and fails if one goes unread, and `make
+  check-scalar` runs it over a baseline vector object as a control that must
+  read as vector code.
 - **A `--device` past the machine's last device was ignored.** Autotune counted
   the device kernels as unable to run, picked the best CPU kernel and exited 0,
   so a mistyped index produced a CPU figure. It now exits 4 with the number of
