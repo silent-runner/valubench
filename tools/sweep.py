@@ -592,6 +592,12 @@ def run_point(args, caps, point, refs=None):
     if proc.returncode == caps.exit["usage"]:
         first = (proc.stderr or "").strip().splitlines()
         return "usage error: %s" % (first[0] if first else "?"), None
+    # A valid point this machine could not run -- no such device or feature,
+    # no memory for the corpus -- is recorded and the sweep goes on. Absent
+    # from binaries before exit 4, which reported these as usage errors.
+    if proc.returncode == caps.exit.get("cannot_run"):
+        why = " ".join(l.strip() for l in (proc.stderr or "").strip().splitlines())
+        return "could not run: %s" % (why[:200] or "?"), None
 
     return "exit %d" % proc.returncode, None
 

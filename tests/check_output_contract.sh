@@ -172,8 +172,8 @@ expect_exit 2 "backend with --where cpu" "$BIN" --backend cuda --where cpu
 expect_exit 2 "compile mode on a CPU kernel" \
     "$BIN" --compile-mode cubin --kernel md5/scalar-s1
 # A kernel the backend filter excludes, and a CUDA compile mode for a kernel
-# that is not CUDA: exit 2 whether or not the device exists, since either the
-# contradiction or the missing device is a reason the run cannot happen.
+# that is not CUDA: exit 2 whether or not the device exists. A contradiction is
+# wrong on every machine, so it outranks the 4 a missing device would give.
 expect_exit 2 "kernel excluded by --backend" \
     "$BIN" --backend cuda --kernel md5/ocl-s1
 expect_exit 2 "compile mode on an OpenCL kernel" \
@@ -218,13 +218,44 @@ expect_exit 1 "verification failure, --where cpu" \
     "$BIN" --where cpu --expect $NOMATCH $QUICK
 expect_exit 1 "verification failure, forced kernel" \
     "$BIN" --kernel md5/scalar-s1 --expect $NOMATCH $QUICK
+# Exit 4 is a valid command this machine, now, could not run: the test for it
+# is whether the same command would succeed on a different machine. Hiding the
+# device runtimes from one run is how a GPU box stands in for a machine without
+# them -- an ICD loader pointed at no vendors, and no CUDA device visible.
+NODEV="OCL_ICD_VENDORS=/nonexistent CUDA_VISIBLE_DEVICES="
+expect_exit 4 "forced device kernel, no device runtime" \
+    env $NODEV "$BIN" --kernel md5/ocl-s1 $QUICK
+expect_exit 4 "--where device, no device runtime" \
+    env $NODEV "$BIN" --where device $QUICK
+# A --device inside the static bound but past this machine's last device used
+# to be dropped by autotune, which then measured the CPU and exited 0.
+ndev=$("$BIN" --list-devices --json 2>/dev/null |
+       python3 -c 'import json,sys; print(len(json.load(sys.stdin)["devices"]))' \
+       2>/dev/null || echo 0)
+if [ "$ndev" -lt 32 ]; then
+    expect_exit 4 "--device past the last device" "$BIN" --device "$ndev" $QUICK
+fi
+# A corpus the address space cannot hold. Not under ASan, which reserves most of
+# the address space for itself and would fail for its own reasons.
+if ! grep -aq __asan_init "$BIN"; then
+    expect_exit 4 "corpus cannot be allocated" \
+        sh -c 'ulimit -v 400000 && exec "$0" --kernel md5/scalar-s1 \
+               --working-set-kb 1048576 --threads 1 --samples 1 --time-ms 20 \
+               --warmup-ms 0' "$BIN"
+fi
+
 # A valid run exits 0, or 3 if the machine was too noisy to trust the number.
-# Both mean it ran; only 1 and 2 mean it did not. Asserting 0 here would make
+# Both mean it ran; 1, 2 and 4 mean it did not. Asserting 0 here would make
 # this test flaky on precisely the shared, contended runners CI uses -- which is
 # the same reason the tool reports noise instead of hiding it.
 "$BIN" --samples 5 --time-ms 120 --warmup-ms 120 >/dev/null 2>&1 && rc=0 || rc=$?
 if [ "$rc" = 0 ] || [ "$rc" = 3 ]; then
     pass=$((pass + 1))
+elif [ "$rc" = 4 ]; then
+    printf '  FAIL  output-contract  a default run exited 4, could not run: this\n'
+    printf '        runner cannot run a default measurement, which is the runner at\n'
+    printf '        fault rather than the contract\n'
+    fail=1
 else
     printf '  FAIL  output-contract  a valid run exited %s (want 0 or 3)\n' "$rc"
     fail=1

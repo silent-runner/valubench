@@ -529,7 +529,11 @@ check-pinning: need-python3 $(BUILD)/valubench
 	   t=$$(if [ "$$n" -gt 4 ]; then echo 4; else echo "$$n"; fi); \
 	   out=$$($(BUILD)/valubench --json --algorithm md5 --where cpu \
 	            --threads $$t --samples 3 --time-ms 40 --warmup-ms 40 \
-	          2>/dev/null); \
+	          2>/dev/null); rc=$$?; \
+	   if [ "$$rc" = 4 ]; then \
+	     echo "  FAIL  pinning       exit 4, could not run: this runner cannot start $$t threads, which is the runner at fault"; \
+	     exit 1; \
+	   fi; \
 	   got=$$(printf '%s' "$$out" | python3 -c \
 	     'import json,sys; e=json.load(sys.stdin)["environment"]; \
 print(e["threads_used"], e["pinned_cpus"])' 2>/dev/null); \
@@ -580,6 +584,10 @@ check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthrea
 	   fi; \
 	   if [ "$$rc" = 1 ]; then \
 	     echo "  FAIL  threadfail  create $$n failing was reported as a verification failure"; \
+	     exit 1; \
+	   fi; \
+	   if [ "$$rc" != 0 ] && [ "$$rc" != 4 ]; then \
+	     echo "  FAIL  threadfail  create $$n failing exited $$rc (want 4, could not run)"; \
 	     exit 1; \
 	   fi; \
 	   if [ "$$rc" != 0 ]; then continue; fi; \

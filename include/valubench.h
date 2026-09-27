@@ -83,15 +83,21 @@
 #define VB_VERSION       "0.7.0"
 
 /*
- * Exit status. Named because they are part of the interface: any tool driving
- * the binary has to distinguish "the hardware computed the wrong answer" from
- * "you asked for something impossible" from "the machine was too noisy to
- * trust the number". tools/sweep.py used to carry its own copy of this list.
+ * Exit status. Named because they are part of the interface: each tells a
+ * script its next move without parsing stderr. 1, the hardware computed a wrong
+ * answer: stop and investigate the machine. 2, the command is wrong: fix it,
+ * since retrying anywhere is pointless. 3, the machine was too noisy to trust
+ * the number. 4, a valid command this machine, now, could not run -- a missing
+ * instruction set or device, no memory for the corpus, threads that would not
+ * start: record it and move on, or retry elsewhere or smaller. The test for 4
+ * against 2 is whether the same command would succeed on a different machine.
+ * tools/sweep.py used to carry its own copy of this list.
  */
 #define VB_EXIT_OK            0
 #define VB_EXIT_VERIFY_FAILED 1
 #define VB_EXIT_USAGE         2
 #define VB_EXIT_NOISY         3
+#define VB_EXIT_CANNOT_RUN    4
 
 #define VB_DEFAULT_MSG_BYTES 55u
 #define VB_MIN_MSG_BYTES     1u

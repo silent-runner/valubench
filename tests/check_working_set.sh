@@ -45,7 +45,14 @@ for case in $CASES; do
     # document is a failure. Exit 1 (verification failed) is a real failure and
     # would leave no usable JSON either.
     out=$("$BIN" --algorithm "$alg" --message-bytes "$mb" --working-set-kb 1024 \
-                 --samples 2 --time-ms 40 --warmup-ms 40 --json 2>/dev/null || true)
+                 --samples 2 --time-ms 40 --warmup-ms 40 --json 2>/dev/null) &&
+        rc=0 || rc=$?
+    if [ "$rc" = 4 ]; then
+        printf '  FAIL  working-set  %s/%s: exit 4, could not run -- the runner\n' \
+               "$alg" "$mb"
+        printf '        cannot run a 1 MiB CPU measurement, which is the runner at fault\n'
+        fail=1; continue
+    fi
     case "$out" in
         *'"working_set_bytes"'*) ;;
         *) printf '  FAIL  working-set  %s/%s: no usable JSON from the run\n' \

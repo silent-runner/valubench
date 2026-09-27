@@ -7,6 +7,20 @@ outside this repository while a durable format for them is decided.
 
 ### Changed
 
+- **Exit 4, "could not run".** A valid command this machine could not run used
+  to exit 2, "usage error", so a script could not tell a wrong command from a
+  machine that lacks something. It now exits 4: a `--kernel` needing an
+  instruction set or device the machine lacks (or a vector length it does not
+  have), autotune finding nothing that could run, a `--device` past the
+  machine's last device, a corpus that could not be allocated, worker threads
+  that would not all start, a device that could not be set up, and a reference
+  ladder out of memory. The test is whether the same command would succeed on
+  another machine; a command that would fail anywhere stays 2, including one
+  that is both contradictory and impossible here. The capabilities document
+  gains `"cannot_run": 4`, and `sweep.py` records such a point as "could not
+  run" and carries on. A script that matched 2 to mean "no device kernel here"
+  must now match 4.
+
 - **Hashes per joule divides by the hardware that hashed.** It divided by
   every energy counter in the machine, so a GPU run carried every other card's
   idle draw and the host's, and a CPU run on a machine whose package counter
@@ -113,6 +127,12 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **A `--device` past the machine's last device was ignored.** Autotune counted
+  the device kernels as unable to run, picked the best CPU kernel and exited 0,
+  so a mistyped index produced a CPU figure. It now exits 4 with the number of
+  devices found.
+- **`--reference-ladder` exited 0 when it ran out of memory**, leaving a sweep
+  to use whatever it had parsed. It now exits 4.
 - **The device tuner timed its candidates at one iteration**, whatever the run
   measured. Over a corpus in DRAM every grid then ties at the memory's speed,
   so the tuner kept one by chance, and when the run itself was compute-bound
