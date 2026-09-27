@@ -278,7 +278,7 @@ jobs:
           make CC=gcc CFLAGS_EXTRA="$SAN" BUILD=build-san -j$(nproc) \
                build-san/valubench build-san/test_hashes \
                build-san/test_kernels build-san/test_checkpoints \
-               build-san/test_device_layer
+               build-san/test_device_layer build-san/test_pipeline
 
       - name: known-answer vectors and every kernel
         env:
@@ -291,6 +291,8 @@ jobs:
           # The PTX translation behind --import-ptx reads a file from the
           # command line; this is where an overrun on hostile input shows.
           ./build-san/test_device_layer
+          # The pipeline's scheduling, several mock devices at once.
+          ./build-san/test_pipeline
 
       # The CLI is the reachable attack surface: everything here is a local
       # input that once crashed or truncated.
