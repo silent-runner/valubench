@@ -19,6 +19,19 @@ working-set sizing, scalar purity and the power model among them. All must pass
 with zero failures before a change is worth reviewing; the `check:` line in the
 Makefile is the authoritative list.
 
+**The build is plain make, on purpose.** Its configuration is a few compile
+probes and per-file `-m` flags, and a build generator would add a dependency to
+remove them: the project builds on a bare Linux box with nothing but a C
+compiler (design.md finding 4). Revisit that if cross-compiling for a target
+whose compiler cannot run here, if a GPU toolchain arrives that needs SDK paths
+at build time (runtime compilation through NVRTC does not), if per-file flags
+become unmanageable, or if packaging needs a standard build description. The
+replacement would then be CMake rather than Meson, which needs Python and ninja
+to build, and it must keep the rules below, the device sources generated into
+the build directory, no OpenCL or CUDA library linked at build time, and a hard
+error rather than a scalar-only binary when the compiler cannot build the
+baseline ISA.
+
 ## Rules that are not negotiable
 
 These exist because breaking one produces a *plausible wrong number* rather than

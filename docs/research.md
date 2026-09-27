@@ -637,6 +637,15 @@ the fixed-width source structure. This mirrors BabelStream's principle from §3.
 implement idiomatically per model rather than forcing a lowest-common-denominator
 abstraction.
 
+As built, the remaining structural cost is the message schedule:
+vector-length-agnostic addressing (`[base, #imm, MUL VL]`) reaches eight vectors
+from one base register and SHA's schedule window is sixteen, while MD5, which
+has no window, is where SVE gains most. Tried against it and rejected in the
+review of 2026-08-26, so not worth re-deriving: an `sri`-based 32-bit rotate
+(more instructions than shift-and-or), a cheaper Maj identity (gcc already
+normalises to it), and two ways of biasing the message base into that reach,
+one of which crashed gcc 13.3.
+
 Worth flagging as a scope observation: **SVE/NEON imply ARM, which the original
 goals did not list** (they name AMD, NVIDIA and Intel). ARM CPU support is either an
 intentional widening of scope or SVE should be treated as a lower-priority
