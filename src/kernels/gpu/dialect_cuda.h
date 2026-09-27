@@ -44,8 +44,14 @@ typedef unsigned long long vb_u64;
 #define VB_LOCAL_ID()    ((size_t) threadIdx.x)
 #define VB_LOCAL_SIZE()  ((size_t) blockDim.x)
 #define VB_GROUP_ID()    ((size_t) blockIdx.x)
+#define VB_GROUP_COUNT() ((size_t) gridDim.x)
 
 #define VB_BARRIER()     __syncthreads()
+
+/* The capacity probe's atomics (device_capacity.h). CUDA's take a pointer
+   that is not volatile; the probe's is, for its plain reads. */
+#define VB_ATOMIC_INC(p)     atomicAdd((unsigned int *) (p), 1u)
+#define VB_ATOMIC_MAX(p, v)  atomicMax((unsigned int *) (p), (v))
 
 /*
  * The work-group scratch. CUDA has no pointer-to-shared argument; the host

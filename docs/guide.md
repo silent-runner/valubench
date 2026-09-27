@@ -209,8 +209,8 @@ alongside the CPU ones.
 
 **Every device kernel is one source, compiled for the device in front of it.**
 Each hash has one core under `src/kernels/gpu/`, and the backend composes it
-with a dialect header and the primitive spellings, then compiles it at run
-time. How rotate, Ch and Maj are spelled is chosen per device vendor -- plain C
+with a dialect header, the primitive spellings and the capacity probe, then
+compiles it at run time. How rotate, Ch and Maj are spelled is chosen per device vendor -- plain C
 unless measurement shows a vendor-specific spelling doing better, as a PTX
 funnel shift does for the 32-bit rotate on NVIDIA -- and the result records the
 choice as `primitives` and `steers`. `--primitives neutral` compiles plain C
@@ -222,7 +222,9 @@ is the right default for a single number, but it is chosen by short probes and
 can land differently from run to run; comparing two compiled kernels -- two
 APIs, or steered against neutral -- wants the same launch on both sides, and
 the result records `geometry_source` so a pinned run is never mistaken for a
-tuned one.
+tuned one. A pinned grid may exceed what the device holds at once, which the
+tuner never does (below); the result then warns that its working set is not
+the corpus.
 
 **Seeing what was compiled.** `--dump-device-code DIR` writes each program as
 compiled: the composed source, the compiler's output where the API exposes it
@@ -333,13 +335,25 @@ things are decoupled deliberately:
 | Knob | Chosen by | Why it is separate |
 |---|---|---|
 | corpus size | `--working-set-kb` | serves the memory axis |
-| launch geometry | measured at init, or `--device-geometry` | a device property, not a workload one |
+| launch geometry | measured at init, at most what the device holds at once, or `--device-geometry` | a device property, not a workload one |
 | corpus sweeps per launch | measured at init, at the iteration count being run | amplifies work without growing the footprint |
 
 Each work-item strides over as many groups as it takes to cover the corpus, so
 the launch is sized for the device while the corpus stays free. Sweep count is
 forced **odd**, so XORing every sweep leaves the single-sweep checksum intact —
 an even count would cancel to zero and silently weaken verification.
+
+**The launch never exceeds what the device holds at once.** The sweeps repeat
+inside each work-item, so a grid too large to be resident together runs in
+waves, and each wave repeats its sweep over only its own share of the corpus.
+Once that share fits in a cache, every repeat after the first is served from
+it, and the result describes a smaller working set than the one it names --
+while verifying perfectly, since every repeat really is hashed. Each kernel
+therefore carries a probe (`src/kernels/gpu/device_capacity.h`) that counts
+how many of its work-groups the device runs at once, measured the same way
+under every API, and the tuner's largest candidate is exactly that. The
+result records it as `concurrent_work_items`, with `waves_per_sweep`, which is
+1 unless a pinned grid is larger.
 
 Throughput was previously a function of `--working-set-kb`, which meant the
 memory axis and the occupancy axis were the same knob and the default
@@ -351,6 +365,7 @@ executing rather than launching:
 ```
   242.00 MH/s   (median of 6 samples, 1 thread)
   launch      6144 work-items x 64 per group, 217 corpus sweeps
+  holds       6144 work-items at once
   kernel busy 98.9% of wall time
 ```
 

@@ -115,6 +115,8 @@ typedef struct {
     size_t   device_global;     /* work-items launched, first device */
     size_t   device_local;      /* work-group size, first device */
     uint32_t device_repeats;    /* corpus sweeps per launch, first device */
+    size_t   device_capacity;   /* work-items it holds at once; 0 unknown */
+    unsigned device_waves;      /* per sweep, worst device; 0 unknown */
     double   device_busy;       /* fraction of wall time spent in the kernel */
     int      device_count;      /* devices used concurrently */
 

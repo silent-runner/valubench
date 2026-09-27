@@ -63,7 +63,7 @@ static void usage(FILE *f, const char *argv0)
             vb_default_threads(),
             VB_DEFAULT_MSG_BYTES, VB_MIN_MSG_BYTES, VB_MAX_MSG_BYTES,
             VB_MAX_ITERS);
-    fprintf(f,
+    fputs(
 "  --transfer MODE      how the corpus reaches a device:\n"
 "                       'resident' (default) uploads it once and launches\n"
 "                       against it; 'stream' re-uploads before every launch,\n"
@@ -87,7 +87,11 @@ static void usage(FILE *f, const char *argv0)
 "  --device-geometry G,L  launch G work-items in groups of L instead of\n"
 "                       tuning, on every device and API alike -- the control\n"
 "                       for comparing compiled kernels. Refused if the kernel\n"
-"                       cannot use it.\n"
+"                       cannot use it; a G larger than the device holds at\n"
+"                       once runs, with a warning that each sweep then\n"
+"                       re-reads a wave's share rather than the corpus.\n",
+          f);
+    fprintf(f,
 "  --dump-device-code DIR  write each device program as compiled -- source,\n"
 "                       intermediate code and compiler log -- into DIR.\n"
 "  --backend LIST       restrict autotune to device kernels from these APIs:\n"

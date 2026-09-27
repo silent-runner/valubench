@@ -75,6 +75,44 @@ static int run_kernel(const vb_kernel *k, const vb_corpus *c, uint64_t groups,
 }
 
 /*
+ * What the device holds at once, and the tuner's grid against it: measured,
+ * a whole number of work-groups, and never exceeded -- a larger grid runs in
+ * waves, and each would repeat its sweep over only its share of the corpus
+ * (src/kernels/gpu/device_capacity.h). A capacity that cannot be measured is
+ * a failure here, though a run survives it, uncapped and saying so.
+ */
+static void check_capacity(const vb_kernel *k)
+{
+    const vb_algorithm *alg = vb_algorithm_by_id(k->alg);
+    const uint64_t count = 13 * (uint64_t) (k->lanes * k->streams);
+    char err[512] = "";
+    vb_corpus c;
+    vb_dev_ctx ctx;
+
+    checks++;
+    if (vb_corpus_build(&c, alg, k->lanes, 0, count,
+                        vb_alg_min_iter_bytes(alg)) != 0) {
+        failures++;
+        printf("  FAIL  %s capacity: corpus build failed\n", k->name);
+        return;
+    }
+    if (open_device(k, &c, 1, &ctx, err, sizeof err) != 0) {
+        failures++;
+        printf("  FAIL  %s capacity: %s\n", k->name, err);
+        vb_corpus_free(&c);
+        return;
+    }
+    if (ctx.capacity == 0 || ctx.capacity % ctx.local_size != 0 ||
+        ctx.global_size > ctx.capacity) {
+        failures++;
+        printf("  FAIL  %s capacity: holds %zu, launches %zu x %zu\n",
+               k->name, ctx.capacity, ctx.global_size, ctx.local_size);
+    }
+    vb_dev_ctx_free(&ctx);
+    vb_corpus_free(&c);
+}
+
+/*
  * The streaming paths, which only --transfer stream and overlap use: the
  * corpus re-uploaded for every pass, from pinned or pageable memory; or
  * uploaded chunk by chunk into two alternating buffers while earlier chunks
@@ -281,6 +319,7 @@ int main(void)
         check_range(k, 41, 2, 4, 1000);
 
         if (k->device) {
+            check_capacity(k);
             check_streaming(k, 0, 0, 1);
             check_streaming(k, 0, 0, 0);
             check_streaming(k, 1, 0, 1);

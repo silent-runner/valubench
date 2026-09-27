@@ -15,8 +15,8 @@
  * The dialect maps the language, not the hardware. What the kernels need that
  * OpenCL and CUDA spell differently is small and fixed: address spaces, the
  * kernel qualifier, work-item indices, the work-group barrier, the work-group
- * scratch buffer and a constant table. How a *primitive* is spelled -- rotate,
- * select -- is a question about the hardware, and lives in
+ * scratch buffer, a constant table and two atomics. How a *primitive* is
+ * spelled -- rotate, select -- is a question about the hardware, and lives in
  * device_primitives.h, keyed by vendor rather than by API.
  */
 
@@ -44,8 +44,15 @@ typedef ulong vb_u64;
 #define VB_LOCAL_ID()     get_local_id(0)
 #define VB_LOCAL_SIZE()   get_local_size(0)
 #define VB_GROUP_ID()     get_group_id(0)
+#define VB_GROUP_COUNT()  get_num_groups(0)
 
 #define VB_BARRIER()      barrier(CLK_LOCAL_MEM_FENCE)
+
+/* Global 32-bit atomics, core since OpenCL 1.1. Only the capacity probe
+   (device_capacity.h) uses them: no two work-items ever share a word while
+   hashing. */
+#define VB_ATOMIC_INC(p)     atomic_inc(p)
+#define VB_ATOMIC_MAX(p, v)  atomic_max((p), (v))
 
 /*
  * The work-group scratch for the reduction. OpenCL passes it as a __local

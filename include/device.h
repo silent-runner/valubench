@@ -5,9 +5,10 @@
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Everything about running a device kernel that does not depend on the API is
- * here: composing the program from the shared kernel sources, choosing the
- * launch geometry, calibrating repeats, folding the per-group partials, and
- * the multi-device split. A backend (src/opencl/backend.c, src/cuda/backend.c)
+ * here: composing the program from the shared kernel sources, measuring how
+ * many work-items the device holds at once and choosing the launch geometry
+ * within that, calibrating repeats, folding the per-group partials, and the
+ * multi-device split. A backend (src/opencl/backend.c, src/cuda/backend.c)
  * implements only what the API itself does -- enumerate, compile, allocate,
  * upload, launch, read back, time an event -- through the table in
  * vb_dev_backend.
@@ -142,6 +143,11 @@ typedef struct {
        c->last_kernel_ns and c->last_transfer_ns from device events. */
     int         (*read)(vb_dev_ctx *c, size_t bytes);
 
+    /* Blocking: write `bytes` from `src` to the start of the partial buffer.
+       It zeroes the capacity probe's counters (device_capacity.h). */
+    int         (*write_partials)(vb_dev_ctx *c, const void *src,
+                                  size_t bytes);
+
     /*
      * Pipelined streaming. Uploads go on a second queue or stream, so chunk
      * s+1 crosses the link while chunk s hashes.
@@ -203,8 +209,16 @@ struct vb_dev_ctx {
     size_t    local_size;
     int       geometry_pinned;
 
+    /* The most work-items of this kernel, in groups of local_size, that the
+       device holds at once, measured (src/kernels/gpu/device_capacity.h); 0
+       if it could not be. The tuner never launches more, so every repeat
+       sweeps the whole corpus; a pinned geometry may, and then each repeat
+       sweeps only a wave's share. */
+    size_t    capacity;
+
     /* Sweeps of the corpus per launch, always odd, so a small working set can
-       still saturate the device and launch overhead is amortised. */
+       still saturate the device and launch overhead is amortised. 0 only for
+       the capacity probe. */
     uint32_t  repeats;
 
     uint64_t  n_partials;         /* one digest per work-group in the launch */
@@ -314,6 +328,16 @@ void vb_dev_ctx_free(vb_dev_ctx *c);
    frees. Exposed so a test can compile what the backends compile without a
    device. `entry` receives the kernel's entry point name. */
 char *vb_dev_program_source(vb_alg_id alg, vb_dialect d, const char **entry);
+
+/*
+ * How many waves one sweep of the corpus takes: the work-items that have work
+ * -- at most one per lane of every group -- over what the device holds at
+ * once, rounded up. 1 is what the tuner guarantees; more means each repeat
+ * sweeps only a wave's share of the corpus, so the working set is not the
+ * corpus. 0 if the capacity is unknown.
+ */
+unsigned vb_dev_waves(size_t global, uint64_t n_groups, unsigned lanes,
+                      size_t capacity);
 
 /* The i-th of n contiguous, near-equal slices of total_groups. */
 void vb_dev_slice(uint64_t total_groups, int n, int i,

@@ -6,9 +6,10 @@
  *
  * One of three algorithm cores (with sha1_device_impl.h and
  * sha512_device_impl.h), mirroring md5_kernel_impl.h on the CPU side. It is
- * compiled after a dialect header -- dialect_opencl.h or dialect_cuda.h -- and
- * device_primitives.h, which the host concatenates at run time, so it includes
- * nothing and names no API: the same text is what OpenCL and CUDA compile.
+ * compiled after a dialect header -- dialect_opencl.h or dialect_cuda.h --
+ * device_primitives.h and device_capacity.h, which the host concatenates at
+ * run time, so it includes nothing and names no API: the same text is what
+ * OpenCL and CUDA compile.
  *
  * Complete as it stands. The round constants and all 64 steps are written out
  * below, because MD5 is a frozen standard -- RFC 1321 is not going to gain a
@@ -101,6 +102,17 @@ VB_KERNEL vb_md5(VB_GLOBAL const vb_u32 *corpus,
                  VB_SCRATCH_PARAM(vb_u32, scratch))
 {
     VB_SCRATCH_DECL(vb_u32, scratch)
+
+    /* Repeats 0 is never a hash launch: it asks how many work-groups of this
+       kernel the device holds at once (device_capacity.h), and `iterations`
+       bounds the wait. */
+    if (repeats == 0) {
+        if (VB_LOCAL_ID() == 0)
+            VB_CAPACITY_PROBE((volatile VB_GLOBAL vb_u32 *) partials,
+                              iterations);
+        VB_BARRIER();
+        return;
+    }
 
     const size_t gid  = VB_GLOBAL_ID();
     const size_t lid  = VB_LOCAL_ID();

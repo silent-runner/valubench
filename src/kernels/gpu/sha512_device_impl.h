@@ -5,10 +5,10 @@
  * Copyright (c) 2026, The valubench authors. See LICENSE.
  *
  * Same construction as md5_device_impl.h and sha1_device_impl.h -- assembled
- * after a dialect header and device_primitives.h, LANES and STREAMS arriving
- * as -D, and the constant tables and all 80 steps written out below from FIPS
- * 180-4. The work decomposition is identical to the CPU template, so the XOR
- * checksum matches it bit for bit.
+ * after a dialect header, device_primitives.h and device_capacity.h, LANES
+ * and STREAMS arriving as -D, and the constant tables and all 80 steps written
+ * out below from FIPS 180-4. The work decomposition is identical to the CPU
+ * template, so the XOR checksum matches it bit for bit.
  *
  * This is the one that stresses the device rather than the harness, in two
  * ways that are worth stating before the code.
@@ -150,6 +150,15 @@ VB_KERNEL vb_sha512(VB_GLOBAL const vb_u64 *corpus,
                     VB_SCRATCH_PARAM(vb_u64, scratch))
 {
     VB_SCRATCH_DECL(vb_u64, scratch)
+
+    /* A capacity probe, not a hash launch: see md5_device_impl.h. */
+    if (repeats == 0) {
+        if (VB_LOCAL_ID() == 0)
+            VB_CAPACITY_PROBE((volatile VB_GLOBAL vb_u32 *) partials,
+                              iterations);
+        VB_BARRIER();
+        return;
+    }
 
     const size_t gid  = VB_GLOBAL_ID();
     const size_t lid  = VB_LOCAL_ID();

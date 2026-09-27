@@ -174,6 +174,9 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
         fprintf(f, "    \"local_work\": %zu,\n", r->device_local);
         fprintf(f, "    \"corpus_sweeps_per_launch\": %u,\n",
                 r->device_repeats);
+        fprintf(f, "    \"concurrent_work_items\": %zu,\n",
+                r->device_capacity);
+        fprintf(f, "    \"waves_per_sweep\": %u,\n", r->device_waves);
         fprintf(f, "    \"kernel_busy_fraction\": %.4f,\n", r->device_busy);
         json_kv_str(f, "transfer_mode",
                     r->transfer == VB_TRANSFER_OVERLAP ? "overlap" :
@@ -436,6 +439,22 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
                 r->device_global, r->device_local, r->device_repeats,
                 r->device_geometry_pinned ? ", pinned" : "",
                 r->device_count > 1 ? "  (first device)" : "");
+        if (r->device_capacity)
+            fprintf(f, "  holds       %zu work-items at once%s\n",
+                    r->device_capacity,
+                    r->device_count > 1 ? "  (first device)" : "");
+        else
+            fprintf(f, "  holds       unknown: the capacity probe failed, so "
+                       "the grid was not capped\n");
+        /* A repeat re-reads only its wave's share, from whatever cache that
+           fits in. Only a pinned grid gets here, or an unknown capacity. */
+        if (r->device_waves > 1 && r->device_repeats > 1)
+            fprintf(f, "  WARNING     the grid is %u waves of what the device "
+                       "holds, so each of the %u\n"
+                       "              sweeps re-reads a wave's share, not the "
+                       "corpus: the working set is\n"
+                       "              smaller than --working-set-kb says\n",
+                    r->device_waves, r->device_repeats);
         fprintf(f, "  kernel busy %.1f%% of wall time%s\n",
                 r->device_busy * 100.0,
                 (r->device_busy < 0.9 && r->transfer == VB_TRANSFER_RESIDENT)
