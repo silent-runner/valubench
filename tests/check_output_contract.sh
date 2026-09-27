@@ -244,9 +244,20 @@ ndev=$("$BIN" --list-devices --json 2>/dev/null |
 if [ "$ndev" -lt 32 ]; then
     expect_exit 4 "--device past the last device" "$BIN" --device "$ndev" $QUICK
 fi
+# Two checks make an allocation fail on demand by capping the address space
+# with ulimit -v. macOS refuses to set that limit at all, and the shell exits 1
+# before the binary runs -- which read as the binary exiting 1. They are skipped,
+# visibly, only off Linux and only when the limit cannot be set; on Linux a limit
+# that will not set is a failure of the check, not a reason to pass it.
+as_limit=yes
+if [ "$(uname -s)" != Linux ] && ! sh -c 'ulimit -v 400000' 2>/dev/null; then
+    as_limit=no
+    echo "  skip  output-contract  allocation failure (no address-space limit on $(uname -s))"
+fi
+
 # A corpus the address space cannot hold. Not under ASan, which reserves most of
 # the address space for itself and would fail for its own reasons.
-if ! grep -aq __asan_init "$BIN"; then
+if [ "$as_limit" = yes ] && ! grep -aq __asan_init "$BIN"; then
     expect_exit 4 "corpus cannot be allocated" \
         sh -c 'ulimit -v 400000 && exec "$0" --kernel md5/scalar-s1 \
                --working-set-kb 1048576 --threads 1 --samples 1 --time-ms 20 \
@@ -309,7 +320,8 @@ fi
 # still exits 1, as for any failed point, so what shows it carried on is its
 # summary and the row that did run -- a traceback would also exit 1. Not under
 # ASan, which reserves most of the address space for itself.
-if [ -f "$SRC/tools/sweep.py" ] && ! grep -aq __asan_init "$BIN"; then
+if [ -f "$SRC/tools/sweep.py" ] && [ "$as_limit" = yes ] &&
+   ! grep -aq __asan_init "$BIN"; then
     tmp=$(mktemp -d)
     out=$(sh -c 'ulimit -v 600000 && exec python3 "$0" --bin "$1" \
                  --algorithm md5 --kernel md5/scalar-s1 --threads 1 \
