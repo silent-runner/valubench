@@ -289,8 +289,8 @@ KHDRS := $(wildcard src/kernels/cpu/*.h)
 # in zero seconds and the next step died on a binary that was never linked.
 .DEFAULT_GOAL := all
 
-.PHONY: all test check check-kernels check-nvrtc check-device-layer clean \
-        config need-python3
+.PHONY: all test check check-kernels check-nvrtc check-device-layer \
+        check-pipeline clean config need-python3
 
 # Three checks read the binary's JSON with python3. Without it they used to
 # fail as if the binary were at fault -- check-pinning reported "no pinned_cpus
@@ -482,6 +482,15 @@ $(BUILD)/test_device_layer: tests/test_device_layer.c $(CORE_OBJS) $(HDRS)
 check-device-layer: $(BUILD)/test_device_layer
 	@$(BUILD)/test_device_layer
 
+# The overlap pipeline's scheduling against a mock device: queue order, the
+# readback ring, several devices, failures, and that every call leaves the
+# next chunks queued. No GPU, so CI runs it everywhere.
+$(BUILD)/test_pipeline: tests/test_pipeline.c $(CORE_OBJS) $(HDRS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_pipeline.c $(CORE_OBJS) $(LDLIBS)
+
+check-pipeline: $(BUILD)/test_pipeline
+	@$(BUILD)/test_pipeline
+
 check-report: $(BUILD)/test_report_json
 	@$(BUILD)/test_report_json
 
@@ -591,7 +600,7 @@ check-working-set: $(BUILD)/valubench
 	@sh tests/check_working_set.sh $(BUILD)/valubench
 
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
-       check-power check-device-layer \
+       check-power check-device-layer check-pipeline \
        check-pinning \
        check-virt \
        check-config \
