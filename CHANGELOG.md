@@ -151,6 +151,10 @@ outside this repository while a durable format for them is decided.
   through the symbol table and fails if one goes unread, and `make
   check-scalar` runs it over a baseline vector object as a control that must
   read as vector code.
+- **`smt_active` and `can_pin` read `True`/`False` in the sweep CSV**,
+  Python's spelling, where `stable` and `verified` read `true`/`false`. All
+  four now share the lowercase one, and a null is empty. Captures already
+  written keep the capitals; `ingest.py` reads either.
 - **A `--device` past the machine's last device was ignored.** Autotune counted
   the device kernels as unable to run, picked the best CPU kernel and exited 0,
   so a mistyped index produced a CPU figure. It now exits 4 with the number of

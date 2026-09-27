@@ -362,7 +362,7 @@ jobs:
           rows = list(csv.DictReader(open("sweep.csv")))
           assert rows, "sweep.py wrote no rows"
           for r in rows:
-              assert r["can_pin"] == "False", "CSV can_pin: %r" % r["can_pin"]
+              assert r["can_pin"] == "false", "CSV can_pin: %r" % r["can_pin"]
               assert r["verified"] == "true", "CSV verified: %r" % r["verified"]
           print("  json: can_pin false, pinned_cpus 0, with the warning")
           print("  csv:  %d row(s), can_pin=%s" % (len(rows), rows[0]["can_pin"]))

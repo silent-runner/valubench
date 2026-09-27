@@ -607,6 +607,12 @@ def pct(v):
     return "" if v is None else "%.1f" % (v * 100.0)
 
 
+def flag(v):
+    """A JSON boolean in the CSV's spelling, the one stable and verified use.
+    Passed through as-is, Python wrote True and False; null or absent is ""."""
+    return "" if v is None else "true" if v else "false"
+
+
 def row_from_result(d, status, point=None):
     """A CSV row from a result document, or a row saying it could not be read.
 
@@ -720,7 +726,7 @@ def _row_from_result(d, status, point=None):
         # SMT reached the JSON but never the CSV, so it never reached any
         # cross-machine comparison -- and it is one of the larger sources of
         # run-to-run variance.
-        "smt_active": e.get("smt_active", ""),
+        "smt_active": flag(e.get("smt_active")),
         # Neither did this, which is worse: pinned_cpus exists because a pool
         # that collapsed onto one core under-reported by 3.4x while reporting
         # verified, and the results README tells readers to check it against
@@ -729,7 +735,7 @@ def _row_from_result(d, status, point=None):
         # And pinned_cpus is 0 both when a pin was refused and when the
         # platform had no affinity API to attempt, so it needs can_pin beside
         # it or a query cannot tell a broken pool from a Mac.
-        "can_pin": e.get("can_pin", ""),
+        "can_pin": flag(e.get("can_pin")),
         "governor": e["governor"],
         # Sampled again after the timed region: a clock or temperature read
         # only at startup describes a machine that has not run yet.
