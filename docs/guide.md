@@ -335,7 +335,7 @@ things are decoupled deliberately:
 | Knob | Chosen by | Why it is separate |
 |---|---|---|
 | corpus size | `--working-set-kb` | serves the memory axis |
-| launch geometry | measured at init, at most what the device holds at once, or `--device-geometry` | a device property, not a workload one |
+| launch geometry | measured at init at the iteration count being run, at most what the device holds at once, or `--device-geometry` | a device property, not a workload one |
 | corpus sweeps per launch | measured at init, at the iteration count being run | amplifies work without growing the footprint |
 
 Each work-item strides over as many groups as it takes to cover the corpus, so

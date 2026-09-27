@@ -113,6 +113,14 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **The device tuner timed its candidates at one iteration**, whatever the run
+  measured. Over a corpus in DRAM every grid then ties at the memory's speed,
+  so the tuner kept one by chance, and when the run itself was compute-bound
+  the chance showed: at a large corpus and many iterations the tuned rate could
+  come out several percent under what the device does with the right launch,
+  and differ from run to run. Candidates are now timed at the iteration count
+  being measured, up to 64 -- past which a resident run is compute-bound on
+  every device measured, and a longer probe would only cost time.
 - **A resident device result could come from cache while claiming a larger
   working set.** Each launch repeats its corpus sweep inside every work-item,
   and a launch grid larger than the device holds at once runs in waves, each
