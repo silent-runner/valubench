@@ -227,6 +227,15 @@ expect_exit 4 "forced device kernel, no device runtime" \
     env $NODEV "$BIN" --kernel md5/ocl-s1 $QUICK
 expect_exit 4 "--where device, no device runtime" \
     env $NODEV "$BIN" --where device $QUICK
+# A contradiction outranks a missing device: a command wrong on every machine
+# is 2 even where it also could not run. With the device present these would
+# pass whichever came first, so they run with it hidden.
+expect_exit 2 "kernel excluded by --backend, no device runtime" \
+    env $NODEV "$BIN" --backend cuda --kernel md5/ocl-s1 $QUICK
+expect_exit 2 "compile mode on an OpenCL kernel, no device runtime" \
+    env $NODEV "$BIN" --compile-mode cubin --kernel md5/ocl-s1 $QUICK
+expect_exit 2 "device kernel with --where cpu, no device runtime" \
+    env $NODEV "$BIN" --where cpu --kernel md5/ocl-s1 $QUICK
 # A --device inside the static bound but past this machine's last device used
 # to be dropped by autotune, which then measured the CPU and exited 0.
 ndev=$("$BIN" --list-devices --json 2>/dev/null |
@@ -290,6 +299,35 @@ for r in rows:
         pass=$((pass + 1))
     else
         echo "  FAIL  output-contract  sweep.py could not drive the binary"
+        fail=1
+    fi
+    rm -rf "$tmp"
+fi
+
+# A point this machine could not run (exit 4) is recorded and the sweep goes on:
+# here a corpus beyond an address-space limit, beside one that fits. The sweep
+# still exits 1, as for any failed point, so what shows it carried on is its
+# summary and the row that did run -- a traceback would also exit 1. Not under
+# ASan, which reserves most of the address space for itself.
+if [ -f "$SRC/tools/sweep.py" ] && ! grep -aq __asan_init "$BIN"; then
+    tmp=$(mktemp -d)
+    out=$(sh -c 'ulimit -v 600000 && exec python3 "$0" --bin "$1" \
+                 --algorithm md5 --kernel md5/scalar-s1 --threads 1 \
+                 --working-set-kb 1024,1048576 --samples 2 --time-ms 20 \
+                 --warmup-ms 0 --csv "$2"' \
+                 "$SRC/tools/sweep.py" "$BIN" "$tmp/b.csv" 2>&1) && rc=0 || rc=$?
+    if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "could not run:" \
+       && printf '%s' "$out" | grep -q "1/2 points in .*1 failed" \
+       && python3 -c '
+import csv, sys
+rows = list(csv.DictReader(open(sys.argv[1])))
+assert len(rows) == 1, "expected the one point that ran, got %d" % len(rows)
+assert rows[0]["verified"] == "true", "row not verified"
+' "$tmp/b.csv" 2>/dev/null; then
+        pass=$((pass + 1))
+    else
+        echo "  FAIL  output-contract  sweep.py did not record a point that could not"
+        echo "        run and carry on (exit $rc)"
         fail=1
     fi
     rm -rf "$tmp"
