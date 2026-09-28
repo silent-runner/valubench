@@ -470,10 +470,28 @@ PY
 )
 note "rungs on this machine: ${ISAS:-none}"
 
-KS=""
-for isa in $ISAS; do
-    for s in 1 2 3 4; do KS="$KS${KS:+,}md5/$isa-s$s"; done
-done
+# Every stream count the binary registers, for each algorithm named, on each
+# rung in $ISAS, in ladder order. Taken from the binary for the same reason the
+# rungs are: these ladders were written to stop at s4, 0.6.0 added 6 and 8 five
+# days later, and where a kernel keeps climbing past four -- MD5 on Neoverse V2
+# and on Apple M6 -- the headline under-reported the core and handed C7 a
+# kernel that was not the fastest.
+ladder() {
+    python3 - "$OUT/capabilities.json" "$ISAS" "$@" <<'PY'
+import json, sys
+caps, isas, algs = sys.argv[1], sys.argv[2].split(), sys.argv[3:]
+have = {}
+for k in json.load(open(caps))["kernels"]:
+    alg, _, rest = k["name"].partition("/")
+    isa, _, s = rest.rpartition("-s")
+    if k.get("available") and k.get("where") == "cpu" and s.isdigit():
+        have.setdefault((alg, isa), []).append(int(s))
+print(",".join("%s/%s-s%d" % (a, i, s)
+               for a in algs for i in isas for s in sorted(have.get((a, i), []))))
+PY
+}
+
+KS=$(ladder md5)
 $SW --algorithm md5 --kernel "$KS" --threads 1 --message-bytes 55 \
     --csv "$OUT/c1-isa-ladder.csv" >> "$LOG" 2>&1
 
@@ -711,12 +729,7 @@ note "wanted s4/s2/s1 across md5/sha1/sha512. Sweep all of it."
 # md5 climbs to s4 while sha512 is fastest at one stream and loses 21% by four.
 # That was found by hand after the capture had finished, which is the argument
 # for it being in the capture.
-KS=""
-for a in md5 sha1 sha512; do
-    for isa in $ISAS; do
-        for s in 1 2 3 4; do KS="$KS${KS:+,}$a/$isa-s$s"; done
-    done
-done
+KS=$(ladder md5 sha1 sha512)
 $SW --algorithm md5,sha1,sha512 --kernel "$KS" --threads 1 \
     --csv "$OUT/c6-streams.csv" >> "$LOG" 2>&1
 [ -s "$OUT/c6-streams.csv" ] && python3 - "$OUT/c6-streams.csv" <<'PY' | show
@@ -727,14 +740,17 @@ for r in rows:
     alg, rest = r["kernel"].split("/")
     isa, _, sn = rest.rpartition("-s")
     by.setdefault((alg, isa), {})[int(sn)] = float(r["hashes_per_sec"]) / 1e6
-print("      %-8s %-8s %8s %8s %8s %8s   %s"
-      % ("alg", "isa", "s1", "s2", "s3", "s4", "best"))
+counts = sorted({s for v in by.values() for s in v})
+print("      %-8s %-8s %s  %s"
+      % ("alg", "isa", "".join("%8s " % ("s%d" % s) for s in counts), "best"))
 for (alg, isa), v in by.items():
     cells = "".join("%8.2f " % v[s] if s in v else "%8s " % "-"
-                    for s in (1, 2, 3, 4))
+                    for s in counts)
     bs = max(v, key=lambda s: v[s])
     gain = v[bs] / v[1] if 1 in v and v[1] else 0
-    flag = "" if bs == 4 else "   <-- not s4"
+    # The best at the highest count swept is an optimum the ladder has not
+    # bracketed: more streams might still pay, and the kernels stop here.
+    flag = "   <-- best at the top of the ladder" if bs == max(v) and len(v) > 1 else ""
     print("      %-8s %-8s %s  s%d, %.2fx over s1%s"
           % (alg, isa, cells, bs, gain, flag))
 PY
