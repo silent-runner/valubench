@@ -726,9 +726,11 @@ note "property of the (algorithm, core) pair rather than a constant -- one part"
 note "wanted s4/s2/s1 across md5/sha1/sha512. Sweep all of it."
 
 # md5 alone used to stand for the whole benchmark here. It does not: on AArch64
-# md5 climbs to s4 while sha512 is fastest at one stream and loses 21% by four.
-# That was found by hand after the capture had finished, which is the argument
-# for it being in the capture.
+# md5 climbs through s4 -- on Apple M6 on to s8 -- while sha512 is fastest at
+# one or two streams and loses ground after. That was found by hand after the
+# capture had finished, which is the argument for it being in the capture; the
+# s4 ceiling this sweep once had is the argument for taking the counts from
+# the binary.
 KS=$(ladder md5 sha1 sha512)
 $SW --algorithm md5,sha1,sha512 --kernel "$KS" --threads 1 \
     --csv "$OUT/c6-streams.csv" >> "$LOG" 2>&1

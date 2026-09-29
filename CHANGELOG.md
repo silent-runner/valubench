@@ -141,6 +141,16 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`run.sh`'s headline ladder stopped at four streams.** C1 and C6 were
+  written before 0.6.0 added s6 and s8, and never swept them, so wherever MD5
+  keeps climbing past four the headline named a kernel that was not the
+  fastest, and C7 measured the roofline with it. On Apple M6 NEON's best is
+  s8, well ahead of s4; on desktop Zen 5 at the default working set s4 still
+  wins, so the x86 headlines stand. Both phases now take their stream counts
+  from the binary, and C6 flags a best at the top of the counts swept rather
+  than any best that is not s4. Also from the M6: `session.txt` recorded a
+  Mac capture's start as its end (BSD `date` has no `-d`), and `ingest.py`
+  knows the `macmini-m6` prefix.
 - **The scalar-purity guard was blind on macOS.** Apple's objdump prints NEON
   as `add.4s v0, v1, v2`, a spelling the guard's register patterns did not
   match, so it counted little but loads and stores -- enough to read some NEON
