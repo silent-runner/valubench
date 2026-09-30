@@ -490,8 +490,10 @@ $(BUILD)/test_checkpoints: $(BUILD)/test_checkpoints.o $(BUILD)/workload.o \
 $(BUILD)/test_report_json: $(BUILD)/test_report_json.o $(CORE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+# power.o dlopens NVML, and before glibc 2.34 dlopen is in libdl: LDLIBS, as
+# every other test binary links, not a bare -pthread.
 $(BUILD)/test_power_model: tests/test_power_model.c $(BUILD)/power.o
-	$(CC) $(CFLAGS) -o $@ $^ -pthread
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # Energy domains must be counted once each: an iGPU inside a package, a card
 # seen by two providers, two sockets, two cards. Constructed rather than
