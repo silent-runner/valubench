@@ -657,7 +657,9 @@ check-threadfail: need-python3 $(BUILD)/test_thread_failure $(BUILD)/fail_pthrea
 	   echo "  FAIL  threadfail  no run of valubench had a create refused: the injector did not load"; \
 	   exit 1; \
 	 fi
-	 $(BUILD)/test_thread_failure | sed 's/^/  ok    threadfail  /'
+	@out=$$($(BUILD)/test_thread_failure) || \
+	   { printf '%s\n' "$$out"; echo "  FAIL  threadfail  test_thread_failure"; exit 1; }; \
+	 printf '%s\n' "$$out" | sed 's/^/  ok    threadfail  /'
 
 check-checkpoints: $(BUILD)/test_checkpoints
 	@$(BUILD)/test_checkpoints
