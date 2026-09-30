@@ -7,6 +7,9 @@ outside this repository while a durable format for them is decided.
 
 ### Changed
 
+- **Captures no longer record the host's name.** `run.sh` wrote `uname -a` into
+  `environment.txt`, node name included; it now writes `uname -srvm`, the
+  kernel and machine without it.
 - **Exit 4, "could not run".** A valid command this machine could not run used
   to exit 2, "usage error", so a script could not tell a wrong command from a
   machine that lacks something. It now exits 4: a `--kernel` needing an

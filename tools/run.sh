@@ -221,7 +221,9 @@ command -v gmake >/dev/null 2>&1 && MK=gmake
 say "environment"
 {
     echo "# date";  date -u
-    echo; echo "# uname"; uname -a
+    # Kernel name, release, version and machine, without -a's node name: a
+    # capture gets shared, and the host's name says nothing about the result.
+    echo; echo "# uname"; uname -srvm
     echo; echo "# machine identity"
     # DMI first, because it needs no network and no provider API and works on
     # every host: on EC2 Nitro sys_vendor is "Amazon EC2" and product_name is
