@@ -14,7 +14,7 @@ Two properties of the benchmark do the heavy lifting here:
 
   * The workload id ("md5-full-55x1") changes whenever the work per hash
     changes, so points from different workloads are never silently compared.
-    docs/research.md 1.4.
+    docs/research.md 1.1.
 
   * The verification checksum is invariant to lanes, streams, threads and
     devices, so two runs of the same workload must produce the same value on

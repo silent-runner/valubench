@@ -6,7 +6,7 @@
  *
  * One command, no configuration, a number. Everything is discovered or
  * autotuned; the flags exist so a result can be reproduced exactly, not so it
- * can be obtained at all (docs/research.md 1.5).
+ * can be obtained at all (docs/research.md 1.1).
  */
 
 #include "bench.h"

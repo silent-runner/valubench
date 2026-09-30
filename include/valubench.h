@@ -14,12 +14,14 @@
  *
  *     state = message(index)                  // message_bytes bytes
  *     repeat `iterations` times:
- *         digest = MD5(state)
- *         state[0..15] = digest               // rest of the message unchanged
+ *         digest = H(state)                   // MD5, SHA-1 or SHA-512
+ *         state[0..D-1] = digest              // D digest bytes: 16, 20, 64;
+ *                                             // the rest of the message stays
  *     contribute digest to the checksum
  *
- * A message of L bytes occupies ceil((L + 9) / 64) blocks once padded, and each
- * block is one compression. So:
+ * A message of L bytes occupies ceil((L + 1 + F) / B) blocks once padded -- B
+ * the block size (64, 64 and 128 bytes) and F the length field (8, 8 and 16) --
+ * and each block is one compression. So:
  *
  *     compressions/sec = hashes/sec * iterations * blocks_per_message
  *
@@ -29,12 +31,13 @@
  * crossover -- the project's second goal. See docs/research.md part 3.
  *
  * WHY THE DIGEST IS FED BACK INTO THE SAME MESSAGE, rather than simply hashing
- * the 16-byte digest again: every iteration must be the *same* work. Hashing a
- * 16-byte digest would collapse to a single block with 12 of 16 words constant,
- * so later iterations would be cheaper than the first. Overwriting the first 16
- * bytes of the full message keeps the instruction mix and the block count
- * identical on every iteration, which makes `iterations` a clean linear
- * multiplier. It also means iterations > 1 requires message_bytes >= 16.
+ * the digest again: every iteration must be the *same* work. Hashing a bare
+ * digest would collapse to a single block that is mostly constant padding --
+ * for MD5, 12 of 16 words -- so later iterations would be cheaper than the
+ * first. Overwriting the first D bytes of the full message keeps the
+ * instruction mix and the block count identical on every iteration, which
+ * makes `iterations` a clean linear multiplier. It also means iterations > 1
+ * requires message_bytes >= D: 16, 20 or 64 bytes.
  *
  *
  * WHERE MESSAGES COME FROM
@@ -66,7 +69,7 @@
  * fingerprint comparable across machines and thread counts.
  *
  * The checksum is comparable within a workload id, not across one: different
- * message lengths or iteration counts are different workloads (research.md 1.4).
+ * message lengths or iteration counts are different workloads (research.md 1.1).
  *
  * See docs/research.md section 2.6.
  */
