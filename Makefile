@@ -364,9 +364,13 @@ CL_UC = $(shell echo $(1) | tr a-z A-Z)
 # kernel misbehaves.
 .SECONDARY: $(CL_HEADERS)
 
+# Through a temporary and renamed, as device_sources.h is: kernel headers
+# were twice found truncated, and a partial header left in place is newer
+# than its source, so the next build trusts it.
 $(BUILD)/dev_%.h: src/kernels/gpu/%.h $(BUILD)/embed_cl
 	$(BUILD)/embed_cl VB_DEV_$(call CL_UC,$*) \
-	    VALUBENCH_DEV_$(call CL_UC,$*)_H $*.h < $< > $@
+	    VALUBENCH_DEV_$(call CL_UC,$*)_H $*.h < $< > $@.tmp
+	@mv $@.tmp $@
 
 # Written through a temporary and renamed, so an interrupted build cannot
 # leave a truncated header behind for the next one to trust.
