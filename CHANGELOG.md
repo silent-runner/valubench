@@ -7,6 +7,8 @@ outside this repository while a durable format for them is decided.
 
 ### Changed
 
+- **`tools/run.sh` is now `tools/capture.sh`**, named for what it makes. A
+  `run.sh` that forwards to it, with a note, stays for one release.
 - **Captures no longer record the host's name.** `run.sh` wrote `uname -a` into
   `environment.txt`, node name included; it now writes `uname -srvm`, the
   kernel and machine without it.
