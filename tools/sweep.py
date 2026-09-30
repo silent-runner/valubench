@@ -206,6 +206,13 @@ CSV_COLUMNS = [
 ]
 
 
+def usage_error(caps, msg):
+    """A command that is wrong on any machine: the binary's own usage status.
+    A bare sys.exit(msg) exits 1, which a sweep uses for points that failed."""
+    print("sweep: %s" % msg, file=sys.stderr)
+    sys.exit(caps.exit["usage"])
+
+
 def parse_list(spec, what):
     """
     Parse an axis specification into a list of ints.
@@ -256,9 +263,14 @@ def parse_list(spec, what):
                 v = v * amount if step[0] == "*" else v + amount
         else:
             try:
-                values.append(int(token))
+                v = int(token)
             except ValueError:
                 raise ValueError("%s: not an integer: %r" % (what, token))
+            # Every axis starts at 1, as a range already has to: a lone 0
+            # used to pass here and fail as a usage error on every point.
+            if v < 1:
+                raise ValueError("%s: values start at 1, got %d" % (what, v))
+            values.append(v)
 
     if not values:
         raise ValueError("%s: no values" % what)
@@ -1162,7 +1174,7 @@ def human_table(rows, out):
             v = r[key]
             if key in ("hashes_per_sec", "compressions_per_sec",
                        "message_bytes_per_sec"):
-                v = "%.2f" % (float(v) / 1e6)
+                v = "%.2f" % (float(v) / 1e6) if v else "-"
             cells.append(str(v).rjust(w))
         line = "  ".join(cells)
         if r["status"] != "ok":
@@ -1181,6 +1193,13 @@ axis syntax:
   55,1015,4087       an explicit list
   64:4096:*2         geometric: 64, 128, 256, ... up to 4096
   1:10:+3            arithmetic: 1, 4, 7, 10
+  every value is at least 1, and within what the binary reports it accepts
+
+exit status:
+  0  every point was measured
+  1  a point failed or its result could not be read; or the hardware
+     computed a wrong answer, which also stops the sweep unless --keep-going
+  2  the command is wrong -- found before any point runs
 
 examples:
   ./tools/sweep.py --message-bytes 55,1015,4087 > sweep.csv
@@ -1291,7 +1310,7 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
     caps = Capabilities.query(args.bin)
 
     if args.resume and not args.csv:
-        sys.exit("sweep: --resume needs --csv, since that is the file it resumes")
+        usage_error(caps, "--resume needs --csv, since that is the file it resumes")
 
     if args.threads is None:
         # The CPUs this process may use, as the binary's own default does. The
@@ -1354,22 +1373,33 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         args.kernel = (parse_choice_list(args.kernel, "--kernel", None)
                        if args.kernel else None)
     except ValueError as e:
-        sys.exit("sweep: %s" % e)
+        usage_error(caps, str(e))
 
     # The binary reports the ranges it enforces, so a grid that steps outside
-    # them is caught here rather than as a usage error on every point.
+    # them is caught here rather than as a usage error on every point. A limit
+    # an older binary does not report is left for it to enforce, as before.
     lim = caps.limits
-    for value, low, high, flag in (
-            (max(args.message_bytes), lim["message_bytes_min"],
+    for values, low, high, flag in (
+            (args.message_bytes, lim["message_bytes_min"],
              lim["message_bytes_max"], "--message-bytes"),
-            (min(args.message_bytes), lim["message_bytes_min"],
-             lim["message_bytes_max"], "--message-bytes"),
-            (max(args.iterations), 1, lim["iterations_max"], "--iterations"),
-            (max(args.threads), 0, lim["threads_max"], "--threads"),
-            (args.samples, 1, lim["samples_max"], "--samples")):
-        if value < low or value > high:
-            sys.exit("sweep: %s %d is outside what this binary accepts "
-                     "(%d..%d)" % (flag, value, low, high))
+            (args.iterations, 1, lim["iterations_max"], "--iterations"),
+            (args.threads, 1, lim["threads_max"], "--threads"),
+            (args.working_set_kb, lim.get("working_set_kb_min", 1),
+             lim.get("working_set_kb_max"), "--working-set-kb"),
+            ([c for c in args.pipeline_chunks if c is not None], 1,
+             lim.get("pipeline_chunks_max"), "--pipeline-chunks"),
+            ([args.samples], 1, lim["samples_max"], "--samples"),
+            ([args.time_ms], lim.get("time_ms_min", 1),
+             lim.get("time_ms_max"), "--time-ms"),
+            ([args.warmup_ms], 0, lim.get("warmup_ms_max"), "--warmup-ms")):
+        for value in values:
+            if value < low or (high is not None and value > high):
+                usage_error(caps, "%s %d is outside what this binary accepts "
+                            "(%d..%s)" % (flag, value, low,
+                                          "" if high is None else high))
+    if args.timeout <= 0:
+        usage_error(caps, "--timeout must be more than 0 seconds, got %g"
+                    % args.timeout)
 
     points, skipped = build_grid(args, caps)
     points = interleave(points)
@@ -1378,7 +1408,7 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         print("sweep: skipping %s" % note, file=sys.stderr)
 
     if not points:
-        sys.exit("sweep: no valid points in the grid")
+        usage_error(caps, "no valid points in the grid")
 
     est = estimate_seconds(args, len(points))
     print("sweep: %d point%s, roughly %s"
@@ -1415,9 +1445,10 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
         if os.path.exists(args.csv) and os.path.getsize(args.csv) > 0:
             completed, header_ok = load_completed(args.csv)
             if not header_ok:
-                sys.exit("sweep: %s has a different set of columns, so it came "
-                         "from another version.\n       Move it aside rather "
-                         "than mixing two schemas in one file." % args.csv)
+                usage_error(caps, "%s has a different set of columns, so it "
+                            "came from another version.\n       Move it aside "
+                            "rather than mixing two schemas in one file."
+                            % args.csv)
             before = len(points)
             points = [p for p in points if point_id(p) not in completed]
             append = True
@@ -1469,23 +1500,32 @@ table instead. Progress always goes to stderr, so redirecting stdout is safe.
 
                 if status == "VERIFICATION FAILED" and not args.keep_going:
                     print("\nsweep: aborting. The hardware did not compute "
-                          "correct MD5 digests, so every later point would be "
-                          "suspect too. Pass --keep-going to override.",
-                          file=sys.stderr)
+                          "correct %s digests, so every later point would be "
+                          "suspect too. Pass --keep-going to override."
+                          % point["algorithm"].upper(), file=sys.stderr)
                     return caps.exit["verify_failed"]
                 continue
 
             row = row_from_result(result, status, point)
+            # Recorded, so the grid's summaries survive it, but not measured:
+            # the run's exit status counts it with the points that failed.
+            if row["status"].startswith("unreadable-result"):
+                failures += 1
             rows.append(row)
             writer.writerow(row)
             csv_target.flush()
 
             if not args.quiet:
-                print("%.2f MH/s  CoV %.2f%%%s"
-                      % (float(row["hashes_per_sec"]) / 1e6,
-                         float(row["cov_percent"]),
-                         "" if status == "ok" else "  [%s]" % status),
-                      file=sys.stderr)
+                if row["hashes_per_sec"]:
+                    print("%.2f MH/s  CoV %.2f%%%s"
+                          % (float(row["hashes_per_sec"]) / 1e6,
+                             float(row["cov_percent"]),
+                             "" if status == "ok" else "  [%s]" % status),
+                          file=sys.stderr)
+                else:
+                    # An unreadable result has no rate; float("") used to
+                    # end the sweep here.
+                    print(row["status"], file=sys.stderr)
     finally:
         if args.csv:
             csv_target.close()
