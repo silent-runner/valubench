@@ -70,6 +70,10 @@ outside this repository while a durable format for them is decided.
 
 ### Added
 
+- **`--list --json` publishes every range the binary enforces.** `limits` gains
+  `working_set_kb_max`, `time_ms_min`, `time_ms_max`, `warmup_ms_max` and
+  `pipeline_chunks_max`, which the parser always enforced but never reported.
+  `--help` prints the same ranges from the same constants.
 - **macOS on Apple silicon.** valubench builds, verifies and measures on
   macOS, from a port by @jj5836 (#2). The threading calls POSIX does not
   guarantee -- barriers, affinity and the affinity mask -- go through
@@ -146,6 +150,26 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`check-threadfail` passed when its last test failed.** It piped the test
+  through `sed`, which stamped "ok" on every line and returned its own status,
+  so "3 failures" printed as ok. It now fails with the test's output.
+- **`sweep.py` accepted grids the binary refuses**, then failed on every point:
+  a lone `0` in an axis list, and out-of-range `--time-ms`, `--warmup-ms`,
+  `--working-set-kb`, `--pipeline-chunks` or `--timeout`. They are refused
+  before any point runs. A result it could not read crashed the progress line
+  and the final table; it is now tabulated, and counts as a failed point. Its
+  verification abort named MD5 for every algorithm.
+- **`sweep.py` and `compare.py` exited 1 on a wrong command**, which is each
+  one's status for a failed point or a regression. Both now exit 2, the usage
+  status. `compare.py` also crashed on a JSON file holding something other than
+  an object; in a results directory such a file is now skipped.
+- **`isa_cost.py` had the spill census's blind spots:** it saw only s1-s4,
+  missed Mach-O names and the kernel behind `ltmp0`, printed empty tables when
+  it could not read an object, and ignored `--help`. `ingest.py --help` looked
+  for captures in a directory called `--help`.
+- **`test_power_model` failed to link before glibc 2.34**, missing `-ldl`.
+- **An interrupted build could leave a truncated device header** that the next
+  build trusted. The generated headers are written through a temporary.
 - **`spill_census.py` read nothing on a Mac and still exited 0.** It matched
   kernels by exact name and looked only at the x86 object and a cross-built
   AArch64 one. Mach-O names carry a leading underscore, and the first function
