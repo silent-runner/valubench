@@ -18,7 +18,7 @@ jobs:
         cc: [gcc, clang]
     name: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # No dependencies beyond a C compiler and make. OpenCL is dlopen'd at run
       # time, so its absence on a runner is a normal no-device outcome rather
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     name: aarch64 (cross, emulated)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install the cross toolchain and emulator
         run: |
@@ -266,7 +266,7 @@ jobs:
         os: [macos-15, macos-26]
     name: ${{ matrix.os }} (apple silicon)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # GNU make only. macOS's own make is 3.81 and cannot read the Makefile;
       # Homebrew's installs as gmake. No coreutils, on purpose: a Mac has no
@@ -379,7 +379,7 @@ jobs:
     runs-on: ubuntu-latest
     name: asan + ubsan
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # -O1 rather than the default -O2: sanitizer builds do not need it, and a
       # single cc1 on the instrumented s8 kernels peaked at 2.3 GB, which OOM'd
@@ -452,7 +452,7 @@ jobs:
     runs-on: ubuntu-latest
     name: opencl (pocl)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install a software OpenCL device
         run: |
@@ -530,7 +530,7 @@ jobs:
     runs-on: ubuntu-latest
     name: cuda dialect (nvrtc)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install NVRTC from its wheel
         run: |
