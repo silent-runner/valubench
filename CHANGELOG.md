@@ -141,6 +141,15 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`spill_census.py` read nothing on a Mac and still exited 0.** It matched
+  kernels by exact name and looked only at the x86 object and a cross-built
+  AArch64 one. Mach-O names carry a leading underscore, and the first function
+  is labelled `ltmp0`, so on a Mac it printed `{}`. It also skipped any kernel
+  it could not find, and never looked past s4. It now takes objects and
+  `--objdump` as arguments and reads the architecture from the object. It
+  counts every scalar kernel the symbol table lists, resolving each label
+  through that table, and fails when one goes unread. `--help` works. On x86
+  its counts for s1-s4 are unchanged.
 - **`run.sh`'s headline ladder stopped at four streams.** C1 and C6 were
   written before 0.6.0 added s6 and s8, and never swept them, so wherever MD5
   keeps climbing past four the headline named a kernel that was not the
