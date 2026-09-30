@@ -168,6 +168,13 @@ def record_from_csv_row(row, source):
     )
 
 
+def usage_error(msg):
+    """Input this cannot compare: exit 2, as the docstring promises. A bare
+    sys.exit(msg) exits 1, which is this tool's word for a regression."""
+    print("compare: %s" % msg, file=sys.stderr)
+    sys.exit(EXIT_USAGE)
+
+
 def load_path(path):
     """
     Read one result file, or every result file in a directory.
@@ -186,7 +193,7 @@ def load_path(path):
                 if fn.endswith((".json", ".csv")):
                     names.append(os.path.join(dirpath, fn))
         if not names:
-            sys.exit("compare: no .json or .csv files under %s" % path)
+            usage_error("no .json or .csv files under %s" % path)
     else:
         names = [path]
 
@@ -200,7 +207,7 @@ def load_path(path):
 
     if not records:
         detail = "".join("\n  %s: %s" % (n, e) for n, e in unreadable)
-        sys.exit("compare: no usable results in %s%s" % (path, detail))
+        usage_error("no usable results in %s%s" % (path, detail))
 
     for name, e in unreadable:
         print("compare: skipping %s (%s)" % (name, e), file=sys.stderr)
@@ -214,6 +221,8 @@ def load_file(path):
     if path.endswith(".json"):
         with open(path) as f:
             doc = json.load(f)
+        if not isinstance(doc, dict):
+            raise ValueError("not a valubench result (a JSON %s)" % type(doc).__name__)
         schema = str(doc.get("schema", ""))
         if not schema.startswith("valubench/result/"):
             raise ValueError("not a valubench result (schema %r)" % schema)
@@ -404,11 +413,11 @@ def main():
     args = ap.parse_args()
 
     if args.threshold < 0:
-        sys.exit("compare: --threshold must be >= 0")
+        usage_error("--threshold must be >= 0")
 
     for path in (args.base, args.new):
         if not os.path.exists(path):
-            sys.exit("compare: no such file or directory: %s" % path)
+            usage_error("no such file or directory: %s" % path)
 
     base = load_path(args.base)
     new = load_path(args.new)

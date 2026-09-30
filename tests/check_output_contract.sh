@@ -414,6 +414,45 @@ expect_exit 0 "corpus exactly distinct, ladder" \
 # The default thread count is the CPUs the process may use, not the CPUs the
 # machine has. It was the online count, so under `taskset -c 0,1` on a 32-CPU
 # box a default run put 32 workers on two CPUs and reported threads_used 32.
+# compare.py's exit statuses are its interface, as the binary's are: 0 no
+# regression, 1 a regression, 2 input it cannot use, 3 not comparable. Every
+# input error used to exit 1, so a mistyped path read as a regression, and a
+# JSON file holding [] crashed it. The slower and mismatched results are the
+# real one with its median or checksum edited.
+if [ -f "$SRC/tools/compare.py" ]; then
+    tmp=$(mktemp -d)
+    cmp="python3 $SRC/tools/compare.py"
+    if "$BIN" --json --kernel md5/scalar-s1 --threads 1 --samples 3 \
+           --time-ms 30 --warmup-ms 0 > "$tmp/base.json" 2>/dev/null ||
+       [ -s "$tmp/base.json" ]; then
+        python3 - "$tmp" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+doc = json.load(open(os.path.join(d, "base.json")))
+slow = json.loads(json.dumps(doc)); slow["result"]["median"] *= 0.5
+json.dump(slow, open(os.path.join(d, "slow.json"), "w"))
+other = json.loads(json.dumps(doc)); other["verification"]["checksum"] = "0" * 32
+json.dump(other, open(os.path.join(d, "other.json"), "w"))
+PY
+        echo '[]' > "$tmp/list.json"
+        mkdir "$tmp/dir" && cp "$tmp/base.json" "$tmp/list.json" "$tmp/dir/"
+        expect_exit 0 "compare, same results"      $cmp "$tmp/base.json" "$tmp/base.json"
+        expect_exit 1 "compare, a regression"      $cmp "$tmp/base.json" "$tmp/slow.json"
+        expect_exit 3 "compare, checksum mismatch" $cmp "$tmp/base.json" "$tmp/other.json"
+        expect_exit 2 "compare, missing file"      $cmp "$tmp/base.json" "$tmp/nonesuch.json"
+        expect_exit 2 "compare, a JSON list"       $cmp "$tmp/list.json" "$tmp/base.json"
+        expect_exit 2 "compare, negative threshold" \
+            $cmp --threshold -1 "$tmp/base.json" "$tmp/base.json"
+        # A stray non-result in a results directory is skipped, not fatal.
+        expect_exit 0 "compare, a directory with a stray file" \
+            $cmp "$tmp/dir" "$tmp/base.json"
+    else
+        echo "  FAIL  output-contract  no result to drive compare.py with"
+        fail=1
+    fi
+    rm -rf "$tmp"
+fi
+
 if command -v taskset >/dev/null 2>&1 && [ "$(nproc --all 2>/dev/null || echo 1)" -ge 3 ]; then
     used=$(taskset -c 0,1 "$BIN" --json --where cpu --samples 2 --time-ms 20 \
                --warmup-ms 0 2>/dev/null |
