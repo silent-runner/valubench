@@ -85,13 +85,14 @@ the smallest corpus is 768 messages; two-byte messages allow up to 4 MiB.
 
 ## Tuning compute intensity
 
-`--iterations N` chains N MD5s per hash, feeding each digest back as the first 16
-bytes **of the same message** rather than hashing the bare digest. That
-distinction is what keeps the knob linear: hashing a 16-byte digest would
+`--iterations N` chains N full hashes per hash, feeding each digest back over the
+start **of the same message** rather than hashing the bare digest. That
+distinction is what keeps the knob linear: hashing a bare MD5 digest would
 collapse to one block with 12 of 16 words constant, so later iterations would
 cost less than the first. Feeding back into the full message keeps the
 instruction mix and block count identical every time. It also means
-`--iterations > 1` requires `--message-bytes >= 16`.
+`--iterations > 1` needs a message at least as long as the digest:
+`--message-bytes >= 16` for MD5, 20 for SHA-1 and 64 for SHA-512.
 
 Compressions/sec stays flat while hashes/sec falls proportionally, which is what
 a linear compute knob should do
@@ -132,13 +133,13 @@ wrong digest once, every later point is suspect too. `--keep-going` overrides.
 A sweep across a 74x range of message sizes and 8x iterations, single core:
 
 ```
-  msg B    blk   iter   thr     WS KiB       kernel         MH/s        MC/s
--------  -----  -----  ----  ---------  -----------  -----------  ----------
-     55      1      1     1       1020      avx2-s4        42.38       42.38
-     55      1      8     1       1020      avx2-s4         5.35       42.80
-    247      4      1     1       1008      avx2-s4        10.42       41.68
-   1015     16      1     1        960      avx2-s4         2.75       43.98
-   4087     64      8     1        768      avx2-s4         0.09       44.53
+   alg    msg B    blk   iter   thr     WS KiB       kernel         MH/s        MC/s        MB/s     CoV%
+------  -------  -----  -----  ----  ---------  -----------  -----------  ----------  ----------  -------
+   md5       55      1      1     1       1008  md5/avx2-s4       159.04      159.04     8747.08   0.1103
+   md5       55      1      8     1       1008  md5/avx2-s4        20.23      161.81     8899.44  0.06279
+   md5      247      4      1     1        960  md5/avx2-s4        40.74      162.94    10061.60   0.2438
+   md5     1015     16      1     1        768  md5/avx2-s4        10.07      161.16    10223.80  0.06334
+   md5     4087     64      8     1       3072  md5/avx2-s4         0.32      164.73    10519.40  0.04378
 ```
 
 Hashes/sec spans nearly three orders of magnitude while compressions/sec stays
@@ -316,10 +317,10 @@ verification design pay off — the existing reference validates device kernels
 with no extra machinery:
 
 ```
-scalar-s1  955e84cbbc05470019604a2bd9ff2821
-avx2-s4    955e84cbbc05470019604a2bd9ff2821
-ocl-s1     955e84cbbc05470019604a2bd9ff2821
-ocl-s3     955e84cbbc05470019604a2bd9ff2821
+md5/scalar-s1  955e84cbbc05470019604a2bd9ff2821
+md5/avx2-s4    955e84cbbc05470019604a2bd9ff2821
+md5/ocl-s1     955e84cbbc05470019604a2bd9ff2821
+md5/ocl-s3     955e84cbbc05470019604a2bd9ff2821
 ```
 
 The corpus is uploaded once outside the timed region, and digests are reduced
@@ -588,11 +589,13 @@ makes benchmark results incomparable.
 
 ```
 $ ./build/valubench --list
-NAME         ISA       LANES  STREAMS  AVAILABLE
-scalar-s1    scalar        1        1  yes
+NAME             ISA       LANES  STREAMS   WHERE  AVAILABLE
+md5/scalar-s1    scalar        1        1     cpu  yes
 ...
-avx2-s4      AVX2          8        4  yes
-avx512-s4    AVX512       16        4  no
+md5/avx2-s4      AVX2          8        4     cpu  yes
+md5/avx512-s4    AVX512       16        4     cpu  yes
+...
+md5/ocl-s1       OpenCL       64        1  device  yes
 ```
 
 **Streams matter as much as lanes.** MD5's 64 steps form a single serial
@@ -603,12 +606,15 @@ pipeline, so every ISA is instantiated at 1, 2, 3, 4, 6 and 8 streams and the ha
 winner by measurement rather than assumption:
 
 ```
-$ ./build/valubench --verbose
-Autotune:
-  scalar-s1          ...
-  scalar-s4          ...
-  sse2-s3            ...
-  avx2-s4            ...
+$ ./build/valubench --verbose --where cpu --threads 1
+Autotune (1 threads):
+  md5/scalar-s1       19.62 MH/s
+  md5/scalar-s2       34.54 MH/s
+  md5/scalar-s3       44.44 MH/s
+  ...
+  md5/avx2-s4        159.15 MH/s
+  ...
+  md5/avx512-s4      414.46 MH/s
 ```
 
 Interleaving alone, with no change of instruction set, is worth **well over half
