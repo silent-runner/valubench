@@ -247,7 +247,7 @@ Known gaps, in the order they matter:
 | [src/bench.c](src/bench.c) | Validation, autotune, timing, statistics |
 | [tools/sweep.py](tools/sweep.py) | Walks a parameter grid, writes CSV, solves for the PCIe balance point |
 | [tools/compare.py](tools/compare.py) | Diffs two result sets, gated on the verification checksum |
-| [tools/run.sh](tools/run.sh) | One-command capture for a time-boxed session on rented hardware, CPU and device |
+| [tools/capture.sh](tools/capture.sh) | One-command capture for a time-boxed session on rented hardware, CPU and device |
 | [docs/research.md](docs/research.md) | Background research and every design decision, with rationale |
 | [docs/design.md](docs/design.md) | What this measures and why, and what measurement changed about the plan |
 | [docs/dependencies.md](docs/dependencies.md) | Packages per distro, and the files they must provide |

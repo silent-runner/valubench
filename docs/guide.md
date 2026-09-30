@@ -836,7 +836,7 @@ since the two answer different questions about where the data starts.
 
 ## Capturing a whole session
 
-`tools/run.sh` captures the environment, gates on `make check`, runs the matrix,
+`tools/capture.sh` captures the environment, gates on `make check`, runs the matrix,
 and leaves one tarball. Seven CPU phases — the ISA ladder, downclocking, energy,
 the SHA unit, all three algorithms, stream interleaving, and the two workload
 axes — then five device phases if the machine has an OpenCL device: the PCIe
@@ -845,9 +845,9 @@ corpus resident, and multi-device slicing.
 Phases that need hardware the machine lacks skip themselves and say so.
 
 ```
-$ ./tools/run.sh                # everything this machine can do
-$ ./tools/run.sh -q             # quick pass
-$ ./tools/run.sh --only device  # on a metered GPU box, the expensive half first
+$ ./tools/capture.sh                # everything this machine can do
+$ ./tools/capture.sh -q             # quick pass
+$ ./tools/capture.sh --only device  # on a metered GPU box, the expensive half first
 ```
 
 CONTRIBUTING.md covers the setup failures worth pre-empting on a rented

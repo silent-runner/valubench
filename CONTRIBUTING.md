@@ -191,7 +191,7 @@ each of them has made a check pass or skip there, rather than fail:
 
 ## Measuring on rented hardware
 
-`tools/run.sh` captures a whole session in one command — CPU phases, then
+`tools/capture.sh` captures a whole session in one command — CPU phases, then
 device phases if the machine has an OpenCL device. Several failures are worth
 pre-empting before either is worth running, all learned the expensive way.
 
@@ -206,7 +206,7 @@ A fresh Ubuntu image runs a background upgrader that can install a kernel and
 reboot the instance out from under a run. Two instances did exactly that within
 minutes of first login. An instance is rented for hours and then destroyed, so
 it gains nothing from unattended patching and can lose a session to it.
-`run.sh` records whether the service is live, because a machine that reboots
+`capture.sh` records whether the service is live, because a machine that reboots
 mid-run looks like a network fault from the other end.
 
 **Do not poll the machine with bare TCP probes, and reuse one SSH connection.**
