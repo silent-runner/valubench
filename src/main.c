@@ -33,7 +33,7 @@ static void usage(FILE *f, const char *argv0)
 "  the throughput surface; working set is the memory axis.\n"
 "\n"
 "Options:\n"
-"  --algorithm NAME     md5 (default), sha1, or sha512\n"
+"  --algorithm NAME     md5 (default), sha1, or sha512; --alg for short\n"
 "  --json               emit machine-readable JSON instead of a report.\n"
 "                       With --list or --list-devices it describes the\n"
 "                       binary rather than a result: algorithms, kernels,\n"
@@ -105,9 +105,12 @@ static void usage(FILE *f, const char *argv0)
 "                       has the driver finish NVRTC's PTX, as OpenCL's code\n"
 "                       is finished; 'cubin' finishes it with NVRTC's own\n"
 "                       ptxas, a different compiler version.\n"
-"  --working-set-kb K   target corpus size (default 1024). Sets how many\n"
-"                       messages are hashed, so sweeping it walks the result\n"
-"                       from L1-resident to DRAM-bound.\n"
+"  --working-set-kb K   target corpus size (default 1024, max %u).\n"
+"                       Sets how many messages are hashed, so sweeping it\n"
+"                       walks the result from L1-resident to DRAM-bound. The\n"
+"                       corpus is never under %u messages, so a small size\n"
+"                       at a long message is raised; the result reports the\n"
+"                       size used.\n"
 "  --expect HEX         verify against this checksum instead of computing\n"
 "                       one. The expected value depends only on algorithm,\n"
 "                       message size, iterations and corpus range, never on\n"
@@ -118,9 +121,9 @@ static void usage(FILE *f, const char *argv0)
 "                       one pass: the digest after k iterations is a prefix\n"
 "                       of the chain for any larger k, so a ladder costs one\n"
 "                       walk rather than one walk per rung.\n"
-"  --samples N          timed iterations (default 10, max %d)\n"
-"  --time-ms N          wall time per iteration (default 100)\n"
-"  --warmup-ms N        warm-up before timing (default 300)\n"
+"  --samples N          timed samples (default 10, max %d)\n"
+"  --time-ms N          wall time per sample (default 100, range 1..%u)\n"
+"  --warmup-ms N        warm-up before timing (default 300, max %u)\n"
 "  --no-pin             do not pin worker threads to cores\n"
 "  --verbose            show autotune probes\n"
 "  --version            print version\n"
@@ -130,7 +133,8 @@ static void usage(FILE *f, const char *argv0)
 "             3 result too noisy to trust, 4 a valid command this machine\n"
 "             could not run (no such CPU feature or device, no memory for\n"
 "             the corpus, threads that would not start).\n",
-            VB_MAX_SAMPLES);
+            VB_MAX_WORKING_SET_KB, VB_BATCH_LCM,
+            VB_MAX_SAMPLES, VB_MAX_TIME_MS, VB_MAX_TIME_MS);
 }
 
 static void list_kernels(void)
