@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run.sh -- one-command capture for a time-boxed session on rented hardware.
+# capture.sh -- one-command capture for a time-boxed session on rented hardware.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026, The valubench authors. See LICENSE.
@@ -11,11 +11,11 @@
 # single tarball to copy off the box -- including if the run fails or is
 # interrupted.
 #
-#   ./tools/run.sh                  everything this machine can do
-#   ./tools/run.sh -q               quick pass, for a first smoke test
-#   ./tools/run.sh --only cpu       CPU phases only
-#   ./tools/run.sh --only device    device phases only, if there is a device
-#   ./tools/run.sh --skip-check     skip 'make check' (the gate -- not advised)
+#   ./tools/capture.sh                everything this machine can do
+#   ./tools/capture.sh -q             quick pass, for a first smoke test
+#   ./tools/capture.sh --only cpu     CPU phases only
+#   ./tools/capture.sh --only device  device phases only, if there is a device
+#   ./tools/capture.sh --skip-check   skip the 'make check' gate (not advised)
 #
 # CPU phases run first and device phases second, and the device phases skip
 # themselves when the machine has no OpenCL device -- so the same command is
@@ -117,7 +117,7 @@ EOF
 # not set -e, so the failure is silent and $1 stays put forever. Check before
 # shifting rather than after.
 need_arg() {
-    [ "$2" -ge 2 ] || { echo "run.sh: $1 needs an argument" >&2; exit 2; }
+    [ "$2" -ge 2 ] || { echo "capture.sh: $1 needs an argument" >&2; exit 2; }
 }
 
 while [ $# -gt 0 ]; do
@@ -456,9 +456,9 @@ ORDER = ["scalar", "sse2", "avx2", "avx512", "neon", "sve", "sve2"]
 seen = []
 for k in json.load(open(sys.argv[1]))["kernels"]:
     alg, _, rest = k["name"].partition("/")
-    # where == "device" is the OpenCL path. It belongs in the GPU phases of
-    # gpu_run.sh, not in a single-thread ISA ladder: it would sit at the top of
-    # the table comparing a 24-EU iGPU against a scalar loop, and P7 would then
+    # where == "device" is a device kernel. It belongs in the device phases
+    # (D1 onward), not in a single-thread ISA ladder: it would sit at the top of
+    # the table comparing a 24-EU iGPU against a scalar loop, and C7 would then
     # pick it as "the best MD5 kernel" and measure the device's axes instead of
     # the core's.
     if alg != "md5" or not k.get("available") or k.get("where") != "cpu":
