@@ -22,6 +22,7 @@ because a capture that quietly fails to land is indistinguishable from one that
 was never taken.
 """
 
+import argparse
 import csv
 import glob
 import os
@@ -93,8 +94,14 @@ def coerce(value, column):
 
 
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "."
-    root = os.path.expanduser(root)
+    ap = argparse.ArgumentParser(
+        description="Build results.db, a disposable SQLite view over the sweep "
+                    "CSVs in a directory of captures.",
+        epilog="The CSVs are the record; delete the database and rerun "
+               "whenever a capture lands.")
+    ap.add_argument("root", nargs="?", default=".",
+                    help="the results directory (default: the current one)")
+    root = os.path.expanduser(ap.parse_args().root)
     db_path = os.path.join(root, "results.db")
 
     files = sorted(glob.glob(os.path.join(root, "*", "*.csv")))
