@@ -6,8 +6,8 @@
  *
  * A number without a machine description is not comparable to anything, which
  * is the main reason results databases like OpenBenchmarking work at all
- * (docs/research.md 1.3). Everything here is read from /proc and /sys -- no
- * dependencies, no network.
+ * (docs/research.md 1.1). Everything here is read from /proc and /sys on Linux
+ * and from sysctl on macOS -- no dependencies, no network.
  */
 
 #ifndef VALUBENCH_SYSINFO_H

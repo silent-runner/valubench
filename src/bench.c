@@ -12,7 +12,9 @@
  *
  * 1. Absolute correctness, before timing. Every candidate kernel hashes the
  *    verified batch and its checksum is compared against the scalar reference,
- *    which is itself checked against the RFC 1321 vectors and coreutils md5sum.
+ *    which is itself checked against the published vectors -- RFC 1321 for
+ *    MD5, FIPS 180-4 for SHA-1 and SHA-512 -- and MD5's padding boundaries
+ *    against values from coreutils md5sum (tests/test_hashes.c).
  *    A kernel that fails here is excluded; if the selected kernel fails, the run
  *    aborts. This catches miscompilation, bad intrinsics, and broken hardware.
  *

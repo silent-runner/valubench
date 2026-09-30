@@ -199,7 +199,7 @@ typedef struct {
     unsigned n_samples;         /* timed iterations */
     unsigned warmup_ms;
     unsigned threads;           /* 0 = one per online CPU */
-    unsigned iterations;        /* chained MD5s per hash; >= 1 */
+    unsigned iterations;        /* chained full hashes per hash; >= 1 */
     unsigned message_bytes;     /* message length */
     const vb_algorithm *alg;    /* which hash to benchmark */
     unsigned working_set_kb;    /* target corpus size; sets the batch count */
