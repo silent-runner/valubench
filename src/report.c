@@ -769,6 +769,11 @@ void vb_report_capabilities_json(FILE *f)
     fprintf(f, "    \"samples_max\": %d,\n", VB_MAX_SAMPLES);
     fprintf(f, "    \"threads_max\": %d,\n", VB_MAX_THREADS);
     fprintf(f, "    \"working_set_kb_min\": 1,\n");
+    fprintf(f, "    \"working_set_kb_max\": %u,\n", VB_MAX_WORKING_SET_KB);
+    fprintf(f, "    \"time_ms_min\": 1,\n");
+    fprintf(f, "    \"time_ms_max\": %u,\n", VB_MAX_TIME_MS);
+    fprintf(f, "    \"warmup_ms_max\": %u,\n", VB_MAX_TIME_MS);
+    fprintf(f, "    \"pipeline_chunks_max\": %u,\n", VB_MAX_PIPELINE_CHUNKS);
     /* Every kernel's group size divides this, so the batch -- and therefore
        the checksum -- is the same whichever kernel ran. It is also the floor
        on the message count, and so on the reachable working set. */

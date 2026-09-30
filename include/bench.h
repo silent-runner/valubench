@@ -16,6 +16,11 @@
 
 #define VB_MAX_SAMPLES 256
 #define VB_MAX_THREADS 1024
+/* Ranges main.c enforces and --list --json publishes, so a driver can check a
+   request before making it; named once so the two cannot drift apart. */
+#define VB_MAX_WORKING_SET_KB  (1u << 24)     /* 16 GiB */
+#define VB_MAX_TIME_MS         3600000u       /* an hour, for a sample or warm-up */
+#define VB_MAX_PIPELINE_CHUNKS 256u
 
 /*
  * How the corpus reaches a device.

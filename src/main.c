@@ -564,7 +564,7 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(a, "--pipeline-chunks")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            if (!parse_uint(a, argv[++i], 1, 256, &cfg.pipeline_chunks))
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_PIPELINE_CHUNKS, &cfg.pipeline_chunks))
                 return VB_EXIT_USAGE;
             chunks_given = 1;
         } else if (!strcmp(a, "--host-memory")) {
@@ -676,7 +676,7 @@ int main(int argc, char **argv)
                 return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--working-set-kb")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            if (!parse_uint(a, argv[++i], 1, 1u << 24, &cfg.working_set_kb))
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_WORKING_SET_KB, &cfg.working_set_kb))
                 return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--samples")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
@@ -684,11 +684,11 @@ int main(int argc, char **argv)
                 return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--time-ms")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            if (!parse_uint(a, argv[++i], 1, 3600000, &cfg.target_ms))
+            if (!parse_uint(a, argv[++i], 1, VB_MAX_TIME_MS, &cfg.target_ms))
                 return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--warmup-ms")) {
             if (!need_arg(i, argc, a)) return VB_EXIT_USAGE;
-            if (!parse_uint(a, argv[++i], 0, 3600000, &cfg.warmup_ms))
+            if (!parse_uint(a, argv[++i], 0, VB_MAX_TIME_MS, &cfg.warmup_ms))
                 return VB_EXIT_USAGE;
         } else {
             fprintf(stderr, "valubench: unknown option '%s'\n", a);
