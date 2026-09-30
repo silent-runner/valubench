@@ -315,6 +315,15 @@ for r in rows:
     rm -rf "$tmp"
 fi
 
+# A grid outside what the binary accepts is refused before any point runs, with
+# the binary's usage status. Each of these used to fail once per point and exit 1.
+if [ -f "$SRC/tools/sweep.py" ]; then
+    expect_exit 2 "sweep, --threads 0" \
+        python3 "$SRC/tools/sweep.py" --bin "$BIN" --threads 0 -q
+    expect_exit 2 "sweep, --time-ms past the binary's limit" \
+        python3 "$SRC/tools/sweep.py" --bin "$BIN" --time-ms 3600001 -q
+fi
+
 # A point this machine could not run (exit 4) is recorded and the sweep goes on:
 # here a corpus beyond an address-space limit, beside one that fits. The sweep
 # still exits 1, as for any failed point, so what shows it carried on is its
