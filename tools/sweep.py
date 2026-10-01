@@ -202,6 +202,7 @@ CSV_COLUMNS = [
     "loadavg_1min",
     "compiler",
     "valubench_version",
+    "valubench_build",
     "status",
 ]
 
@@ -758,6 +759,9 @@ def _row_from_result(d, status, point=None):
         "loadavg_1min": e.get("loadavg_1min"),
         "compiler": e["compiler"],
         "valubench_version": b["version"],
+        # git describe of the binary's tree. The version alone said 0.7.0
+        # for 66 commits; absent from binaries before 0.8.0.
+        "valubench_build": b.get("build", ""),
         "status": status,
     }
 

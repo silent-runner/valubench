@@ -14,6 +14,7 @@
 #include "report.h"
 #include "sysinfo.h"
 #include "opencl.h"
+#include "build_id.h"       /* generated: VB_BUILD, from git describe */
 
 #include <errno.h>
 #include <ctype.h>
@@ -536,7 +537,7 @@ int main(int argc, char **argv)
             if (parse_devices(argv[++i], &cfg) != 0) return VB_EXIT_USAGE;
         } else if (!strcmp(a, "--version")) {
             char wid[64];
-            printf("valubench %s (workload %s)\n", VB_VERSION,
+            printf("valubench %s, build %s (workload %s)\n", VB_VERSION, VB_BUILD,
                    vb_workload_id(wid, sizeof wid, cfg.alg,
                                   cfg.message_bytes, cfg.iterations));
             return VB_EXIT_OK;
