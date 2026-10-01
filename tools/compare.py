@@ -32,7 +32,8 @@ read into them.
   ./tools/compare.py base.csv new.csv --threshold 5
 
 Exit status: 0 no significant regression, 1 at least one regression,
-             2 usage error, 3 results not comparable (checksum mismatch).
+             2 usage error, 3 results not comparable (a checksum mismatch, or
+             a side that failed verification).
 """
 
 import argparse
@@ -284,10 +285,18 @@ def compare(base, new, threshold):
     base_idx = index(base, "base")
     new_idx = index(new, "new")
 
-    matched, mismatched, only_base, only_new = [], [], [], []
+    matched, mismatched, unverified, only_base, only_new = [], [], [], [], []
 
     for key in sorted(base_idx.keys() & new_idx.keys()):
         b, n = base_idx[key], new_idx[key]
+
+        # A result that failed verification computed a wrong answer, or was
+        # gated against one, so its rate measures nothing whichever way it
+        # compares. Read and kept on the record, then never judged: a wrong
+        # answer computed quickly used to come out FASTER.
+        if not (b.verified and n.verified):
+            unverified.append((b, n))
+            continue
 
         # Same workload, same messages, so the digests XOR to the same value on
         # any machine. If they do not, one side computed something else and no
@@ -305,10 +314,21 @@ def compare(base, new, threshold):
     for key in sorted(new_idx.keys() - base_idx.keys()):
         only_new.append(new_idx[key])
 
-    return matched, mismatched, only_base, only_new
+    return matched, mismatched, unverified, only_base, only_new
 
 
-def human(matched, mismatched, only_base, only_new, threshold, f):
+def human(matched, mismatched, unverified, only_base, only_new, threshold, f):
+    if unverified:
+        print("FAILED VERIFICATION -- a wrong answer is not a measurement\n",
+              file=f)
+        for b, n in unverified:
+            print("  %s" % b.label(), file=f)
+            for side, r in (("base", b), ("new ", n)):
+                if not r.verified:
+                    print("    %s failed verification  (%s)" % (side, r.source),
+                          file=f)
+        print("", file=f)
+
     if mismatched:
         print("CHECKSUM MISMATCH -- these did not compute the same answer\n",
               file=f)
@@ -362,7 +382,7 @@ def human(matched, mismatched, only_base, only_new, threshold, f):
                  ", ..." if len(only_new) > 3 else ""), file=f)
 
 
-def as_json(matched, mismatched, only_base, only_new, threshold, f):
+def as_json(matched, mismatched, unverified, only_base, only_new, threshold, f):
     doc = {
         "schema": "valubench/comparison/1",
         "threshold_percent": threshold,
@@ -389,6 +409,15 @@ def as_json(matched, mismatched, only_base, only_new, threshold, f):
                 "new_checksum": n.checksum,
             }
             for b, n in mismatched
+        ],
+        "unverified": [
+            {
+                "workload": b.workload,
+                "kernel": b.kernel,
+                "base_verified": b.verified,
+                "new_verified": n.verified,
+            }
+            for b, n in unverified
         ],
         "only_in_base": [r.label() for r in only_base],
         "only_in_new": [r.label() for r in only_new],
@@ -422,10 +451,10 @@ def main():
     base = load_path(args.base)
     new = load_path(args.new)
 
-    matched, mismatched, only_base, only_new = compare(base, new,
-                                                       args.threshold)
+    matched, mismatched, unverified, only_base, only_new = compare(
+        base, new, args.threshold)
 
-    if not matched and not mismatched:
+    if not matched and not mismatched and not unverified:
         print("compare: nothing in common between %s and %s.\n"
               "  Points are paired by workload, kernel, threads, transfer mode, "
               "working set and\n  device variant (compile mode, primitives, "
@@ -435,13 +464,13 @@ def main():
         return EXIT_USAGE
 
     if args.json:
-        as_json(matched, mismatched, only_base, only_new, args.threshold,
-                sys.stdout)
+        as_json(matched, mismatched, unverified, only_base, only_new,
+                args.threshold, sys.stdout)
     else:
-        human(matched, mismatched, only_base, only_new, args.threshold,
-              sys.stdout)
+        human(matched, mismatched, unverified, only_base, only_new,
+              args.threshold, sys.stdout)
 
-    if mismatched:
+    if mismatched or unverified:
         return EXIT_INCOMPARABLE
     if any(m[4] == "SLOWER" for m in matched):
         return EXIT_REGRESSION

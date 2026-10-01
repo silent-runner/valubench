@@ -424,7 +424,8 @@ expect_exit 0 "corpus exactly distinct, ladder" \
 # machine has. It was the online count, so under `taskset -c 0,1` on a 32-CPU
 # box a default run put 32 workers on two CPUs and reported threads_used 32.
 # compare.py's exit statuses are its interface, as the binary's are: 0 no
-# regression, 1 a regression, 2 input it cannot use, 3 not comparable. Every
+# regression, 1 a regression, 2 input it cannot use, 3 not comparable -- a
+# checksum mismatch or a result that failed verification. Every
 # input error used to exit 1, so a mistyped path read as a regression, and a
 # JSON file holding [] crashed it. The slower and mismatched results are the
 # real one with its median or checksum edited.
@@ -442,12 +443,18 @@ slow = json.loads(json.dumps(doc)); slow["result"]["median"] *= 0.5
 json.dump(slow, open(os.path.join(d, "slow.json"), "w"))
 other = json.loads(json.dumps(doc)); other["verification"]["checksum"] = "0" * 32
 json.dump(other, open(os.path.join(d, "other.json"), "w"))
+# Failed verification, but fast: it must be refused, not judged an improvement.
+bad = json.loads(json.dumps(doc)); bad["verification"]["verified"] = False
+bad["result"]["median"] *= 2
+json.dump(bad, open(os.path.join(d, "bad.json"), "w"))
 PY
         echo '[]' > "$tmp/list.json"
         mkdir "$tmp/dir" && cp "$tmp/base.json" "$tmp/list.json" "$tmp/dir/"
         expect_exit 0 "compare, same results"      $cmp "$tmp/base.json" "$tmp/base.json"
         expect_exit 1 "compare, a regression"      $cmp "$tmp/base.json" "$tmp/slow.json"
         expect_exit 3 "compare, checksum mismatch" $cmp "$tmp/base.json" "$tmp/other.json"
+        expect_exit 3 "compare, a result that failed verification" \
+            $cmp "$tmp/base.json" "$tmp/bad.json"
         expect_exit 2 "compare, missing file"      $cmp "$tmp/base.json" "$tmp/nonesuch.json"
         expect_exit 2 "compare, a JSON list"       $cmp "$tmp/list.json" "$tmp/base.json"
         expect_exit 2 "compare, negative threshold" \
