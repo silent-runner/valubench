@@ -57,7 +57,9 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
 
     fprintf(f, "{\n");
 
-    fprintf(f, "  \"schema\": \"valubench/result/1\",\n");
+    /* 2: energy.hashes_per_joule divides by the hardware that hashed, where /1
+       divided by the whole machine. See docs/schema.md. */
+    fprintf(f, "  \"schema\": \"valubench/result/2\",\n");
     fprintf(f, "  \"benchmark\": {\n");
     json_kv_str(f, "name", "valubench", ",");
     json_kv_str(f, "version", VB_VERSION, ",");
