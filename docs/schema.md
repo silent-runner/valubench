@@ -40,7 +40,7 @@ result's `hashes_per_joule` compares with a `/2` result's
 | `benchmark` | `name`, `version`, `build`, `algorithm`, `workload`, `workload_description`, `comparability` |
 | `parameters` | `message_bytes`, `digest_bytes`, `block_bytes`, `blocks_per_message`, `iterations`, `threads`, `batch_messages`, `working_set_bytes` |
 | `result` | `unit`, `direction`, `median`, `min`, `max`, `mean`, `stddev`, `cov_percent`, `stable`, `cov_threshold_percent`, `message_bytes_per_second`, `compressions_per_second`, `samples`, `total_hashes`, `total_seconds` |
-| `verification` | `verified`, `checksum`, `method` |
+| `verification` | `verified`, `checksum`, `expected_source`, `method` |
 | `kernel` | `name`, `isa`, `lanes`, `streams`, `selected_by`, `runs_on` |
 | `device` | present only for device kernels: name, vendor, driver, `backend`, `compiler`, `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`, `steers`, `geometry_source`, launch geometry, `concurrent_work_items` and `waves_per_sweep`, `kernel_busy_fraction`, `transfer_mode` (`resident`, `stream` or `overlap`), with `overlap` also `pipeline_chunks` (the count used) and `overlap_efficiency`, in either streaming mode `host_memory` and the per-pass transfer figures, and where NVML answers `gpu_clock_mhz` (`first`, `last`, `min`, `max` SM clock over the timed samples, and `samples`), `gpu_temp_c` and `gpu_throttle_reasons` |
 | `environment` | `cpu`, `cpus_online`, `smt_active`, `governor`, frequency fields, `loadavg_1min`, `kernel_version`, `os`, `compiler`, `isa_available`, `threads_used`, `pinned_cpus`, `can_pin`, `virtualized`, temperature fields |
@@ -59,6 +59,13 @@ lanes, streams, threads and devices, so for a given workload it is the same on
 every machine that computes correctly. `compare.py` treats a mismatch as a hard
 failure rather than a performance delta: it means one side computed something
 else.
+
+**`verification.expected_source`** — what the gate compared against: `computed`
+when the scalar reference ran in this process, `supplied` when the value came
+in with `--expect`, computed earlier by the same reference (`sweep.py` solves a
+ladder once with `--reference-ladder` and supplies each point its answer).
+Either way the kernel had to match the reference; the field says when the
+reference ran. Absent before 0.8.0.
 
 **`device`, what ran the kernel.** `backend` is the API (`opencl` or `cuda`);
 `compiler` and `compiler_version` say what compiled the program -- for OpenCL

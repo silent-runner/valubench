@@ -188,6 +188,7 @@ CSV_COLUMNS = [
     # provenance
     "verified",
     "checksum",
+    "expected_source",
     "samples",
     "cpu",
     "virtualized",
@@ -731,6 +732,9 @@ def _row_from_result(d, status, point=None):
         "gpu_throttle": dev.get("gpu_throttle_reasons", ""),
         "verified": "true" if d["verification"]["verified"] else "false",
         "checksum": d["verification"]["checksum"],
+        # "supplied" when this sweep handed the point a precomputed --expect
+        # value, as it does for iterated rungs; absent before 0.8.0.
+        "expected_source": d["verification"].get("expected_source", ""),
         "samples": len(r["samples"]),
         "cpu": e["cpu"],
         # yes/no/unknown. Every ARM machine measured so far is a VM
