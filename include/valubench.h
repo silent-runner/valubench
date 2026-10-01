@@ -83,7 +83,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define VB_VERSION       "0.7.0"
+#define VB_VERSION       "0.8.0"
 
 /*
  * Exit status. Named because they are part of the interface: each tells a
