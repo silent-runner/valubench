@@ -31,7 +31,7 @@ The version number moves when a field is removed or its meaning changes.
 
 | object | fields |
 |---|---|
-| `benchmark` | `name`, `version`, `algorithm`, `workload`, `workload_description`, `comparability` |
+| `benchmark` | `name`, `version`, `build`, `algorithm`, `workload`, `workload_description`, `comparability` |
 | `parameters` | `message_bytes`, `digest_bytes`, `block_bytes`, `blocks_per_message`, `iterations`, `threads`, `batch_messages`, `working_set_bytes` |
 | `result` | `unit`, `direction`, `median`, `min`, `max`, `mean`, `stddev`, `cov_percent`, `stable`, `cov_threshold_percent`, `message_bytes_per_second`, `compressions_per_second`, `samples`, `total_hashes`, `total_seconds` |
 | `verification` | `verified`, `checksum`, `method` |
@@ -77,6 +77,14 @@ each repeat re-read one wave's share, possibly from a cache the corpus does
 not fit, and the result says so; 0 means unknown. Results from before
 2026-09-27 lack both fields, and a resident one at a corpus larger than the
 device's L2 may be such a result.
+
+**`benchmark.build` says which code produced the result**: `git describe` of
+the tree it was built from, so `v0.8.0` for a release, `v0.8.0-3-gabc1234` three
+commits after one, a short hash with no tag reachable, `-dirty` for uncommitted
+changes, and `unknown` outside a git checkout. `version` names the release
+alone, and between releases every build claims the last one; `build` is what
+tells them apart. The sweep CSV carries it as `valubench_build`, and
+`--list --json` and `--version` report it too. Absent before 0.8.0.
 
 **`energy.hashes_per_joule` divides by the hardware that hashed** -- the
 cards the run used, matched by PCI address, and the CPU package when the CPU

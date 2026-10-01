@@ -13,6 +13,7 @@
 #include "report.h"
 #include "power.h"
 #include "opencl.h"
+#include "build_id.h"       /* generated: VB_BUILD, from git describe */
 
 #include <stdio.h>
 #include <string.h>
@@ -60,6 +61,7 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
     fprintf(f, "  \"benchmark\": {\n");
     json_kv_str(f, "name", "valubench", ",");
     json_kv_str(f, "version", VB_VERSION, ",");
+    json_kv_str(f, "build", VB_BUILD, ",");
     json_kv_str(f, "algorithm", r->alg->name, ",");
     json_kv_str(f, "workload", wid, ",");
     /* Built from the algorithm descriptor rather than written out: these
@@ -405,7 +407,7 @@ void vb_report_human(FILE *f, const vb_result *r, const vb_sysinfo *si,
     vb_workload_id(wid, sizeof wid, r->alg, r->message_bytes, r->iterations);
 
     fprintf(f, "\n");
-    fprintf(f, "valubench %s   workload %s\n", VB_VERSION, wid);
+    fprintf(f, "valubench %s (%s)   workload %s\n", VB_VERSION, VB_BUILD, wid);
     fprintf(f, "==================================================================\n");
     fprintf(f, "\n");
 
@@ -757,7 +759,8 @@ void vb_report_capabilities_json(FILE *f)
 
     fprintf(f, "  \"benchmark\": {\n");
     json_kv_str(f, "name", "valubench", ",");
-    json_kv_str(f, "version", VB_VERSION, "");
+    json_kv_str(f, "version", VB_VERSION, ",");
+    json_kv_str(f, "build", VB_BUILD, "");
     fprintf(f, "  },\n");
 
     /* Ranges the binary enforces. A driver that respects these never has to

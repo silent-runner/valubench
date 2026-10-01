@@ -299,6 +299,22 @@ ifneq ($(file < $(CONFIG_STAMP)),$(strip $(CONFIG)))
   $(file > $(CONFIG_STAMP),$(strip $(CONFIG)))
 endif
 
+# Which build this is, for every result to carry: the release tag, the commits
+# since it and whether the tree was dirty. VB_VERSION alone said 0.7.0 for 66
+# commits, among them a fix that changed resident results, so measurements
+# either side of it claimed the same provenance. A header of its own, rewritten
+# only when it changes, so a new commit rebuilds the two objects that print it
+# and nothing else.
+VB_BUILD := $(shell git -C $(CURDIR) describe --tags --always --dirty 2>/dev/null || echo unknown)
+BUILD_ID_H := $(BUILD)/build_id.h
+define BUILD_ID_TEXT
+/* GENERATED: the build, from git describe. */
+#define VB_BUILD "$(VB_BUILD)"
+endef
+ifneq ($(file < $(BUILD_ID_H)),$(BUILD_ID_TEXT))
+  $(file > $(BUILD_ID_H),$(BUILD_ID_TEXT))
+endif
+
 HDRS := include/hashes.h include/sha512_const.h \
         include/algorithm.h include/valubench.h \
         include/bench.h include/sysinfo.h include/report.h \
@@ -436,6 +452,9 @@ $(BUILD)/test_hashes.o: tests/test_hashes.c $(HDRS)
 # generated from that header. Named explicitly rather than folded into $(HDRS),
 # which would rebuild every object for a kernel-only change.
 $(BUILD)/registry.o: $(KHDRS)
+
+# The two objects that print the build; see BUILD_ID_H.
+$(BUILD)/main.o $(BUILD)/report.o: $(BUILD_ID_H)
 
 $(BUILD)/test_report_json.o: tests/test_report_json.c $(HDRS)
 	$(CC) $(CFLAGS) -c -o $@ $<
