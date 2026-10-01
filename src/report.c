@@ -139,6 +139,10 @@ void vb_report_json(FILE *f, const vb_result *r, const vb_sysinfo *si,
             fprintf(f, "%08x", (unsigned) r->checksum[i]);
     }
     fprintf(f, "\",\n");
+    /* Whether the value the gate compared against was computed by the scalar
+       reference in this run, or supplied with --expect from one computed
+       earlier -- the same reference, at a different time (bench.h). */
+    json_kv_str(f, "expected_source", cfg->have_expected ? "supplied" : "computed", ",");
     json_kv_str(f, "method",
         "XOR of every digest computed, compared against the scalar reference "
         "before timing and re-compared on every timed iteration.",
