@@ -3,7 +3,7 @@
 Notable changes. Measured figures are not recorded here; they are tracked
 outside this repository while a durable format for them is decided.
 
-## Unreleased
+## 0.8.0 — 2026-10-01
 
 A CUDA backend beside OpenCL, an overlapped streaming mode that measures the
 sustained rate with uploads hidden behind hashing, and macOS on Apple silicon.
