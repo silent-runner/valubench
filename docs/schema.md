@@ -5,7 +5,7 @@ are defined, each carrying a `schema` field naming itself and its version.
 
 | schema | produced by | contents |
 |---|---|---|
-| `valubench/result/1` | `--json` | one measurement |
+| `valubench/result/2` | `--json` | one measurement |
 | `valubench/capabilities/1` | `--list --json` | what this binary can do here |
 | `valubench/devices/1` | `--list-devices --json` | the `opencl` object; `backends`, each available or why not; and `devices`, each physical device once with its PCI address and the APIs that reach it |
 | `valubench/reference/1` | `--reference-ladder` | expected checksums for a ladder of iteration counts |
@@ -27,7 +27,13 @@ Both bundled tools do exactly that — see `Capabilities.query` in
 
 The version number moves when a field is removed or its meaning changes.
 
-## `valubench/result/1`
+## `valubench/result/2`
+
+**What changed from `/1`** (0.7.0 and earlier): `energy.hashes_per_joule`
+divides by the hardware that hashed rather than by the whole machine -- see
+below. Nothing was removed; every other difference is an added field. A `/1`
+result's `hashes_per_joule` compares with a `/2` result's
+`hashes_per_joule_machine`.
 
 | object | fields |
 |---|---|
