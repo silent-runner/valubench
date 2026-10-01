@@ -5,88 +5,204 @@ outside this repository while a durable format for them is decided.
 
 ## Unreleased
 
-### Changed
+A CUDA backend beside OpenCL, an overlapped streaming mode that measures the
+sustained rate with uploads hidden behind hashing, and macOS on Apple silicon.
+Also a class of device results that came from cache while claiming a larger
+working set, found and fixed, and several checks that could pass without
+testing anything.
 
-- **`tools/run.sh` is now `tools/capture.sh`**, named for what it makes. A
-  `run.sh` that forwards to it, with a note, stays for one release.
-- **Captures no longer record the host's name.** `run.sh` wrote `uname -a` into
-  `environment.txt`, node name included; it now writes `uname -srvm`, the
-  kernel and machine without it.
-- **Exit 4, "could not run".** A valid command this machine could not run used
-  to exit 2, "usage error", so a script could not tell a wrong command from a
-  machine that lacks something. It now exits 4: a `--kernel` needing an
-  instruction set or device the machine lacks (or a vector length it does not
-  have), autotune finding nothing that could run, a `--device` past the
-  machine's last device, a corpus that could not be allocated, worker threads
-  that would not all start, a device that could not be set up, and a reference
-  ladder out of memory. The test is whether the same command would succeed on
-  another machine; a command that would fail anywhere stays 2, including one
-  that is both contradictory and impossible here. The capabilities document
-  gains `"cannot_run": 4`, and `sweep.py` records such a point as "could not
-  run" and carries on. A script that matched 2 to mean "no device kernel here"
-  must now match 4.
+### Upgrading from 0.7.0
 
-- **Hashes per joule divides by the hardware that hashed.** It divided by
-  every energy counter in the machine, so a GPU run carried every other card's
-  idle draw and the host's, and a CPU run on a machine whose package counter
-  was unreadable was divided by an idle GPU. Now a device run counts the
-  cards it used, matched to the counters by PCI address, a CPU run the CPU
-  package and DRAM, and a run where an OpenCL device is the CPU both. The
-  whole-machine figure is kept as `hashes_per_joule_machine` -- what
-  `hashes_per_joule` meant before -- and each energy source says whether it
-  was counted. When nothing that hashed was measured the efficiency is
-  reported as unmeasured. The sweep CSV gains `hashing_watts`,
-  `hashes_per_joule` and `hashes_per_joule_machine`; it carried no energy
-  before.
-- **Streaming uploads read pinned host memory by default.** Every transfer
-  figure until now came from pageable memory, which the driver stages through
-  a bounce buffer; a real offload would use page-locked memory the copy engine
-  reads directly. `--transfer stream` now copies the corpus into a mapped,
-  driver-allocated buffer at setup and uploads from that, so streaming link
-  rates and every N\* and break-even figure derived from them rise. `--host-memory
-  pageable` reproduces the old behaviour, and the JSON and the sweep CSV record
-  which one a run used (`host_memory`). A platform that cannot map such a buffer
-  falls back to pageable and says so there.
+- **Exit 4 is new: a valid command this machine could not run.** It used to
+  be 2. A script that took 2 to mean "no such device or instruction set here"
+  must now match 4. `sweep.py` and `compare.py` now exit 2 on a wrong command,
+  where they exited 1, their status for a failed point or a regression, and
+  `compare.py` exits 3 for a result that failed verification as well as for a
+  checksum mismatch.
+- **The result schema is `valubench/result/2`.** `energy.hashes_per_joule`
+  divides by the hardware that hashed. To compare with a 0.7.0 result, use this
+  release's `hashes_per_joule_machine`.
+- **Streaming uploads read pinned host memory by default.** Link rates, and
+  every N\* and break-even figure derived from them, rise against 0.7.0's.
+  `--host-memory pageable` measures the old way.
+- **Treat earlier resident device results at a corpus larger than the device's
+  L2 as suspect.** They may have been served from cache; see Fixed.
+- **`tools/run.sh` is `tools/capture.sh`.** `run.sh` forwards to it for this
+  release.
+- **The sweep CSV gains columns**, so `--resume` will not append to a 0.7.0
+  file. `smt_active` and `can_pin` now read `true`/`false` like the other
+  booleans.
+- **A corpus larger than the message length can make distinct is refused**, so
+  one-byte messages cannot be run at all.
 
-- **Device kernels are one core per hash, in no particular API's language.**
-  `src/kernels/gpu/<alg>_device_impl.h` replaces each `.cl` file, and a program
-  is composed at run time from a dialect header, `device_primitives.h` and the
-  core, so a second API compiles the same text. How rotate, Ch and Maj become
-  instructions is decided per device vendor in one table; on NVIDIA only the
-  32-bit rotate is steered, to a PTX funnel shift, because NVIDIA's OpenCL
-  compiler misses most of SHA-1's rotates written plainly. On NVIDIA, OpenCL's
-  SHA-1 and SHA-512 compile to the same instruction count as before or a few
-  fewer, and MD5's hash loop is unchanged; its work-group reduction takes
-  eight more instructions per work-item, once per launch.
+### Fixed
 
-- **Devices are listed once, whichever APIs reach them.** `--list-devices`
-  shows each physical device with its PCI address and a line per API, and the
-  JSON gains `backends` and `devices` beside the unchanged `opencl` object.
-  `--device` indices follow the same list, which keeps OpenCL's order.
-- **The device layer is shared by every API.** Program composition, launch
-  geometry, repeat calibration, the partial fold and the multi-device split
-  moved out of the OpenCL backend into `src/device/`, so a second API is a
-  second backend and nothing else.
+- **A resident device result could come from cache while claiming a larger
+  working set.** Each launch repeats its corpus sweep inside every work-item,
+  and a launch grid larger than the device holds at once runs in waves, each
+  repeating only its own share of the corpus; once a wave's share fit in a
+  cache, every repeat after the first was served from it. On an RTX PRO 2000 a
+  256 MiB corpus on a large grid reported several times what the card's memory
+  can deliver, from L2, and a 16 MiB one ran from L1; the checksum held,
+  because every repeat was really hashed. Every kernel now measures how many
+  of its work-items the device holds at once -- a probe built into the kernel,
+  the same under OpenCL and CUDA, which agrees with CUDA's occupancy query on
+  every kernel and group size -- and the tuner never launches more. A grid at
+  that size ran as fast as any honest one. `--device-geometry` still takes a
+  larger grid, and the result warns that its working set is not the corpus.
+  The JSON and the sweep CSV gain `concurrent_work_items` and
+  `waves_per_sweep`. Streaming and overlap launch one sweep and were never
+  affected.
+
+- **A vacuous fingerprint on very short messages.** Only the first four bytes
+  of a message carry its index, so a one-byte message has 256 values and a
+  corpus of 1,536 repeats each six times. Repeated digests cancel under XOR:
+  `--message-bytes 1 --working-set-kb 96` reported checksum `000…0`, verified,
+  and a kernel returning zero would have passed. A corpus with more messages
+  than the length can make distinct is now a usage error. One-byte messages
+  can no longer be run at all, since the smallest corpus is 768 messages.
+
+- **`compare.py` judged results that had failed verification.** It read each
+  result's `verified` flag and never used it, so a result that computed the
+  wrong answer while running twice as fast came out "+100.0% FASTER", exit 0.
+  Such a pair is now not comparable, like a checksum mismatch: listed under
+  FAILED VERIFICATION, as `unverified` in the JSON, and exit 3.
+
+- **Changing the compiler or flags reused objects built with the old ones.**
+  Objects depended on their sources, not on what compiled them, so `make
+  CC=clang` over a gcc build relinked the gcc objects -- on a benchmark where
+  the compiler alone moves a kernel by tens of percent. `build/config.stamp`
+  holds the compiler and every flag that decides an object's contents, and
+  every object depends on it.
+
+- **A heap overflow when `--kernel` names another algorithm's kernel.**
+  Forcing a kernel fixes the algorithm, but the kernel was looked up after
+  `--message-bytes` and `--expect` had been validated against the default MD5.
+  `--kernel sha512/scalar-s1 --iterations 2` passed the digest-fits-message
+  guard and the oracle wrote a 64-byte digest into a 55-byte message; glibc
+  aborted. `--expect` was likewise parsed at MD5's width for a SHA-512 kernel.
+  The kernel is now resolved before either check.
+
+- **The OpenCL partial buffer could be overrun on small work-groups.** It was
+  sized for work-groups of at least 64, but a kernel the device caps below 64
+  is tuned down to 32 or less, and each group writes one partial. It is sized
+  now from the smallest group the tuner will pick for that kernel, and a launch
+  with more groups than the buffer holds is refused rather than run.
+
+- **Device launches were tuned and calibrated at one iteration**, whatever the
+  run measured. Over a corpus in DRAM every candidate grid then ties at the
+  memory's speed, so the tuner kept one by chance; when the run itself was
+  compute-bound the tuned rate could come out several percent under what the
+  device does with the right launch, and differ from run to run. And the
+  number of corpus sweeps per launch, chosen at `--iterations 1`, launched a
+  1,024-iteration run for tens of seconds at a time -- long enough for a
+  display GPU's watchdog to kill it. Both now use the iteration count being
+  measured; the tuner's probes stop at 64, past which a resident run is
+  compute-bound on every device measured.
+
+- **The default thread count oversubscribed restricted CPU sets.** It was
+  the online CPU count, so under `taskset -c 0,1` on a 32-CPU machine a
+  default run put 32 workers on two CPUs and reported `threads_used` 32. It is
+  now the number of CPUs the process is allowed on, in the binary and in
+  `sweep.py`.
+
+- **Two failures exited as success.** A `--device` past the machine's last
+  device was dropped by autotune, which measured the best CPU kernel and exited
+  0, so a mistyped index produced a CPU figure; `--reference-ladder` exited 0
+  when it ran out of memory, leaving a sweep to use whatever it had parsed.
+  Both now exit 4.
+
+- **Telemetry on a machine with two cards.** GPU clock readings came from every
+  NVML device, keeping the highest, so an idle card could report the clock;
+  they now come only from the devices the run used, matched by PCI address. And
+  one card seen by two energy providers could be counted twice when its PCI
+  address has hex letters: NVML writes them in capitals and sysfs in lower case,
+  and the comparison was case-sensitive.
+
+- **`capture.sh`'s headline ladder stopped at four streams.** C1 and C6 were
+  written before 0.6.0 added s6 and s8, and never swept them, so wherever MD5
+  keeps climbing past four the headline named a kernel that was not the
+  fastest, and C7 measured the roofline with it. On Apple M6 NEON's best is
+  s8, well ahead of s4; on desktop Zen 5 at the default working set s4 still
+  wins, so the x86 headlines stand. Both phases now take their stream counts
+  from the binary, and C6 flags a best at the top of the counts swept rather
+  than any best that is not s4. Also from the M6: `session.txt` recorded a
+  Mac capture's start as its end (BSD `date` has no `-d`).
+
+- **`sweep.py`:**
+  - **It fitted one crossover through incompatible points.** The PCIe balance
+    point was fitted per algorithm and kernel only, so a sweep over two message
+    lengths, two working sets, or pinned and pageable uploads drew one line
+    through all of them, and the transfer term -- which should be flat -- moved
+    by the difference between them. It is now fitted per group of points that
+    differ only in iteration count; a tuned launch geometry does not split a
+    group, a pinned one does.
+  - **It accepted grids the binary refuses, then failed on every point**: a
+    lone `0` in an axis list, and out-of-range `--time-ms`, `--warmup-ms`,
+    `--working-set-kb`, `--pipeline-chunks` or `--timeout`. They are refused
+    before any point runs.
+  - **A result it could not read crashed the progress line and the final
+    table.** It is now tabulated, and counts as a failed point.
+  - **It flagged points as duplicate working sets when only their size
+    matched**, so two transfer modes, kernels or compile modes over one corpus
+    were reported as collapsed onto each other. It now compares everything the
+    point asked for.
+  - **Its verification abort named MD5** for every algorithm.
+
+- **Checks that could pass without testing anything:**
+  - **The scalar-purity guard was blind on macOS.** Apple's objdump prints NEON
+    as `add.4s v0, v1, v2`, a spelling the guard's register patterns did not
+    match, so it counted little but loads and stores -- enough to read some
+    NEON kernels as scalar. It also labels an object's first function `ltmp0`,
+    so `md5/scalar-s1` was never inspected. Nothing it passed there was wrong,
+    since Apple clang does not vectorise the scalar kernels, but it could not
+    have said otherwise. It now reads both syntaxes, resolves every function
+    through the symbol table and fails if one goes unread, and `make
+    check-scalar` runs it over a baseline vector object as a control that must
+    read as vector code.
+  - **`check-threadfail` passed when its last test failed.** It piped the test
+    through `sed`, which stamped "ok" on every line and returned its own
+    status, so "3 failures" printed as ok. It now fails with the test's output.
+
+- **The analysis tools on a Mac.** `spill_census.py` read nothing and still
+  exited 0: it matched kernels by exact name, looked only at a fixed x86 object
+  and a cross-built AArch64 one, and skipped any kernel it could not find, so on
+  a Mac -- leading underscores, the first function behind `ltmp0` -- it printed
+  `{}`. It now takes objects and `--objdump` as arguments, reads the
+  architecture from the object, counts every scalar kernel the symbol table
+  lists and fails when one goes unread; on x86 its s1-s4 counts are unchanged.
+  `isa_cost.py` had the same blind spots and also printed empty tables when it
+  could not read an object. Both now see every stream count, not only s1-s4.
+  `ingest.py` knows the `macmini-m6` prefix, and `ingest.py --help` no longer
+  looks for captures in a directory called `--help`; `isa_cost.py` no longer
+  ignores `--help`.
+
+- **`compare.py` crashed on a JSON file holding something other than an
+  object.** In a results directory such a file is now skipped.
+
+- **The build.** `test_power_model` failed to link before glibc 2.34, missing
+  `-ldl`. And an interrupted build could leave a truncated device header that
+  the next build trusted; the generated headers are now written through a
+  temporary.
 
 ### Added
 
-- **`--list --json` publishes every range the binary enforces.** `limits` gains
-  `working_set_kb_max`, `time_ms_min`, `time_ms_max`, `warmup_ms_max` and
-  `pipeline_chunks_max`, which the parser always enforced but never reported.
-  `--help` prints the same ranges from the same constants.
-- **macOS on Apple silicon.** valubench builds, verifies and measures on
-  macOS, from a port by @jj5836 (#2). The threading calls POSIX does not
-  guarantee -- barriers, affinity and the affinity mask -- go through
-  `include/vb_threads.h`, which on Linux makes the same calls as before, and
-  the environment comes from sysctl. A Mac differs in two ways, and every
-  result says so: there is no thread-affinity API, so workers run unpinned
-  across the chip's mixed core types, and there is no energy counter or
-  cpufreq interface, so those phases skip. The JSON and the sweep CSV gain
-  `can_pin`, which separates a platform with nothing to pin from a pin that
-  was refused -- both read `pinned_cpus: 0`. `tools/run.sh` captures a Mac,
-  recording its core tiers, and CI builds and checks on two macOS images.
-  Build with GNU make 4.3 or newer (`brew install make`, then `gmake`); the
-  Makefile now says so rather than failing to parse under the system's 3.81.
+- **A CUDA backend.** On an NVIDIA card with NVRTC available, every device
+  kernel also runs through CUDA as `md5/cuda-s1` and its siblings: the same
+  cores, compiled at run time by NVRTC for the device present, launched by the
+  same harness, verified against the same checksum. Nothing from a CUDA
+  toolkit is needed to build -- libcuda and libnvrtc are loaded at run time
+  and their entry points declared in the source -- and a machine without them
+  reports CUDA unavailable. `--compile-mode` chooses between PTX finished by
+  the driver (`ptx-jit`, the default) and machine code from NVRTC's own ptxas
+  (`cubin`). Autotune weighs CUDA and OpenCL kernels by measurement;
+  `--backend` restricts it to one API. `--import-ptx FILE` runs a CUDA kernel
+  from a PTX file instead -- in practice what NVIDIA's OpenCL compiler produced,
+  with OpenCL's calling convention translated on the way in and the hash code
+  untouched -- so one card compares compilers under one runtime and runtimes
+  under one compiler, and Nsight Compute can profile OpenCL's code. CI
+  compiles every kernel's CUDA spelling with NVRTC from its pip wheel, without
+  a GPU.
 
 - **`--transfer overlap`: the sustained rate with uploads overlapping
   hashing.** Streaming uploaded each pass and then hashed it, so the link and
@@ -104,185 +220,137 @@ outside this repository while a durable format for them is decided.
   transfer times. Both backends, through the shared device layer; `sweep.py`
   takes it as a transfer mode and `--pipeline-chunks` as an axis, and fits
   each mode's crossover separately.
-- **A CUDA backend.** On an NVIDIA card with NVRTC available, every device
-  kernel also runs through CUDA as `md5/cuda-s1` and its siblings: the same
-  cores, compiled at run time by NVRTC for the device present, launched by the
-  same harness, verified against the same checksum. Nothing from a CUDA
-  toolkit is needed to build -- libcuda and libnvrtc are loaded at run time
-  and their entry points declared in the source -- and a machine without them
-  reports CUDA unavailable. `--compile-mode` chooses between PTX finished by
-  the driver (`ptx-jit`, the default) and machine code from NVRTC's own ptxas
-  (`cubin`). Autotune weighs CUDA and OpenCL kernels by measurement;
-  `--backend` restricts it to one API. CI compiles every kernel's CUDA
-  spelling with NVRTC from its pip wheel, without a GPU.
-- **`--import-ptx FILE`** runs a CUDA kernel from a PTX file instead of
-  compiling it -- in practice what NVIDIA's OpenCL compiler produced, dumped
-  with `--dump-device-code`. OpenCL's calling convention is translated on the
-  way in, the hash code untouched, so one card compares compilers under one
-  runtime and runtimes under one compiler, and Nsight Compute can profile the
-  code OpenCL's compiler made.
-- **`--device-geometry GLOBAL,LOCAL`** pins the device launch instead of
-  tuning it, and refuses one the kernel cannot use. The tuner picks by short
-  probes and can land differently between identical runs; comparing two
-  compiled kernels needs the same launch on both sides.
-- **`--primitives neutral`** compiles device kernels with plain C for every
-  primitive, to size what steering is worth.
-- **`--dump-device-code DIR`** writes each device program as compiled: the
-  composed source, what the compiler produced where the API exposes it, and
-  the build log.
+
+- **macOS on Apple silicon.** valubench builds, verifies and measures on
+  macOS, from a port by @jj5836 (#2). The threading calls POSIX does not
+  guarantee -- barriers, affinity and the affinity mask -- go through
+  `include/vb_threads.h`, which on Linux makes the same calls as before, and
+  the environment comes from sysctl. A Mac differs in two ways, and every
+  result says so: there is no thread-affinity API, so workers run unpinned
+  across the chip's mixed core types, and there is no energy counter or
+  cpufreq interface, so those phases skip. The JSON and the sweep CSV gain
+  `can_pin`, which separates a platform with nothing to pin from a pin that
+  was refused -- both read `pinned_cpus: 0`. `capture.sh` captures a Mac,
+  recording its core tiers, and CI builds and checks on two macOS images.
+  Build with GNU make 4.3 or newer (`brew install make`, then `gmake`); the
+  Makefile now says so rather than failing to parse under the system's 3.81.
+
+- **Every result says which build produced it.** `benchmark.build` is `git
+  describe` of the tree it was built from -- `v0.8.0` for a release,
+  `v0.8.0-3-gabc1234` three commits after one, `-dirty` for uncommitted
+  changes -- in the result and capabilities JSON, in `--version` and the
+  report header, and as the sweep CSV's `valubench_build`. The version alone
+  said 0.7.0 for the whole of this cycle, across a fix that changed results.
+
 - **The result says what ran a device kernel**: `backend`, `compiler`,
   `compiler_version`, `compile_mode`, `platform`, `pci_address`, `primitives`,
   `steers` and `geometry_source`, in the JSON and as columns of the sweep CSV,
   which also gains the launch geometry -- `global_work`, `local_work`,
   `sweeps_per_launch` -- and the GPU's clock range and throttle reasons --
   `gpu_mhz_min`, `gpu_mhz_max`, `gpu_throttle` -- all of which previously
-  stopped at the JSON. `sweep.py` has
-  `--primitives`, `--device-geometry` and `--compile-mode` axes (with
-  `--import-ptx-dir` adding OpenCL's own code under CUDA as a fourth arm),
-  and runs points that differ only in device API side by side, rotating the
-  order. `compare.py` pairs points by these too, where it used to keep the
-  first of two rows that differed only in them.
-- **`tools/idiom_probe.py`**, which compiles each hash primitive in every
-  spelling the kernels offer, for NVRTC at any NVIDIA architecture, NVIDIA's
-  OpenCL on a present card and clang's AMDGPU backend, and counts the machine
-  instructions each costs -- alone and, with `--kernels`, inside the real
-  kernels. It is the evidence a steer has to cite.
+  stopped at the JSON. `sweep.py` has `--primitives`, `--device-geometry` and
+  `--compile-mode` axes (with `--import-ptx-dir` adding OpenCL's own code under
+  CUDA as a fourth arm), and runs points that differ only in device API side
+  by side, rotating the order. `compare.py` pairs points by these too, where it
+  used to keep the first of two rows that differed only in them.
 
-### Fixed
+- **Tools for comparing device code.** `--device-geometry GLOBAL,LOCAL` pins
+  the launch instead of tuning it, and refuses one the kernel cannot use: the
+  tuner picks by short probes and can land differently between identical runs,
+  and comparing two compiled kernels needs the same launch on both sides.
+  `--primitives neutral` compiles device kernels with plain C for every
+  primitive, to size what steering is worth. `--dump-device-code DIR` writes
+  each device program as compiled -- the composed source, what the compiler
+  produced where the API exposes it, and the build log. And
+  `tools/idiom_probe.py` compiles each hash primitive in every spelling the
+  kernels offer, for NVRTC at any NVIDIA architecture, NVIDIA's OpenCL on a
+  present card and clang's AMDGPU backend, and counts the machine instructions
+  each costs -- alone and, with `--kernels`, inside the real kernels. It is the
+  evidence a steer has to cite.
 
-- **`check-threadfail` passed when its last test failed.** It piped the test
-  through `sed`, which stamped "ok" on every line and returned its own status,
-  so "3 failures" printed as ok. It now fails with the test's output.
-- **`sweep.py` accepted grids the binary refuses**, then failed on every point:
-  a lone `0` in an axis list, and out-of-range `--time-ms`, `--warmup-ms`,
-  `--working-set-kb`, `--pipeline-chunks` or `--timeout`. They are refused
-  before any point runs. A result it could not read crashed the progress line
-  and the final table; it is now tabulated, and counts as a failed point. Its
-  verification abort named MD5 for every algorithm.
-- **`sweep.py` and `compare.py` exited 1 on a wrong command**, which is each
-  one's status for a failed point or a regression. Both now exit 2, the usage
-  status. `compare.py` also crashed on a JSON file holding something other than
-  an object; in a results directory such a file is now skipped.
-- **`isa_cost.py` had the spill census's blind spots:** it saw only s1-s4,
-  missed Mach-O names and the kernel behind `ltmp0`, printed empty tables when
-  it could not read an object, and ignored `--help`. `ingest.py --help` looked
-  for captures in a directory called `--help`.
-- **`test_power_model` failed to link before glibc 2.34**, missing `-ldl`.
-- **An interrupted build could leave a truncated device header** that the next
-  build trusted. The generated headers are written through a temporary.
-- **`spill_census.py` read nothing on a Mac and still exited 0.** It matched
-  kernels by exact name and looked only at the x86 object and a cross-built
-  AArch64 one. Mach-O names carry a leading underscore, and the first function
-  is labelled `ltmp0`, so on a Mac it printed `{}`. It also skipped any kernel
-  it could not find, and never looked past s4. It now takes objects and
-  `--objdump` as arguments and reads the architecture from the object. It
-  counts every scalar kernel the symbol table lists, resolving each label
-  through that table, and fails when one goes unread. `--help` works. On x86
-  its counts for s1-s4 are unchanged.
-- **`run.sh`'s headline ladder stopped at four streams.** C1 and C6 were
-  written before 0.6.0 added s6 and s8, and never swept them, so wherever MD5
-  keeps climbing past four the headline named a kernel that was not the
-  fastest, and C7 measured the roofline with it. On Apple M6 NEON's best is
-  s8, well ahead of s4; on desktop Zen 5 at the default working set s4 still
-  wins, so the x86 headlines stand. Both phases now take their stream counts
-  from the binary, and C6 flags a best at the top of the counts swept rather
-  than any best that is not s4. Also from the M6: `session.txt` recorded a
-  Mac capture's start as its end (BSD `date` has no `-d`), and `ingest.py`
-  knows the `macmini-m6` prefix.
-- **The scalar-purity guard was blind on macOS.** Apple's objdump prints NEON
-  as `add.4s v0, v1, v2`, a spelling the guard's register patterns did not
-  match, so it counted little but loads and stores -- enough to read some NEON
-  kernels as scalar. It also labels an object's first function `ltmp0`, so
-  `md5/scalar-s1` was never inspected. Nothing the guard passed there was
-  wrong, since Apple clang does not vectorise the scalar kernels, but it could
-  not have said otherwise. It now reads both syntaxes, resolves every function
-  through the symbol table and fails if one goes unread, and `make
-  check-scalar` runs it over a baseline vector object as a control that must
-  read as vector code.
-- **`smt_active` and `can_pin` read `True`/`False` in the sweep CSV**,
-  Python's spelling, where `stable` and `verified` read `true`/`false`. All
-  four now share the lowercase one, and a null is empty. Captures already
-  written keep the capitals; `ingest.py` reads either.
-- **A `--device` past the machine's last device was ignored.** Autotune counted
-  the device kernels as unable to run, picked the best CPU kernel and exited 0,
-  so a mistyped index produced a CPU figure. It now exits 4 with the number of
-  devices found.
-- **`--reference-ladder` exited 0 when it ran out of memory**, leaving a sweep
-  to use whatever it had parsed. It now exits 4.
-- **The device tuner timed its candidates at one iteration**, whatever the run
-  measured. Over a corpus in DRAM every grid then ties at the memory's speed,
-  so the tuner kept one by chance, and when the run itself was compute-bound
-  the chance showed: at a large corpus and many iterations the tuned rate could
-  come out several percent under what the device does with the right launch,
-  and differ from run to run. Candidates are now timed at the iteration count
-  being measured, up to 64 -- past which a resident run is compute-bound on
-  every device measured, and a longer probe would only cost time.
-- **A resident device result could come from cache while claiming a larger
-  working set.** Each launch repeats its corpus sweep inside every work-item,
-  and a launch grid larger than the device holds at once runs in waves, each
-  repeating only its own share of the corpus; once a wave's share fit in a
-  cache, every repeat after the first was served from it. On an RTX PRO 2000 a
-  256 MiB corpus on a large grid reported several times what the card's memory
-  can deliver, from L2, and a 16 MiB one ran from L1; the checksum held,
-  because every repeat was really hashed. Every kernel now measures how many
-  of its work-items the device holds at once -- a probe built into the kernel,
-  the same under OpenCL and CUDA, which agrees with CUDA's occupancy query on
-  every kernel and group size -- and the tuner never launches more. A grid at
-  that size ran as fast as any honest one. `--device-geometry` still takes a
-  larger grid, and the result warns that its working set is not the corpus.
-  The JSON and the sweep CSV gain `concurrent_work_items` and
-  `waves_per_sweep`. Resident results at a corpus larger than the device's L2
-  from earlier captures should be treated as suspect; streaming and overlap
-  launch one sweep and were never affected.
-- **`sweep.py` flagged points as duplicate working sets when only their size
-  matched**, so two transfer modes, kernels or compile modes over one corpus
-  were reported as collapsed onto each other. It now compares everything the
-  point asked for.
-- **`sweep.py` fitted one crossover through incompatible points.** The PCIe
-  balance point was fitted per algorithm and kernel only, so a sweep over two
-  message lengths, two working sets or pinned and pageable uploads drew one
-  line through all of them, and the transfer term -- which should be flat --
-  moved by the difference between them. It is now fitted per group of points
-  that differ only in iteration count; a tuned launch geometry does not split
-  a group, a pinned one does.
-- **Device repeats were calibrated at one iteration.** The number of corpus
-  sweeps per launch was chosen at `--iterations 1` and kept, so a
-  1,024-iteration run launched for tens of seconds at a time -- long enough
-  for a display GPU's watchdog to kill it. It is now calibrated at the
-  iteration count being measured.
-- **GPU clock telemetry read every NVML device** and kept the highest, so on a
-  machine with two cards an idle one could report the clock. It now samples
-  only the devices the run used, matched by PCI address.
-- **One card seen by two energy providers could be counted twice** when its
-  PCI address has hex letters: NVML writes them in capitals and sysfs in lower
-  case, and the comparison was case-sensitive.
-- **A heap overflow when `--kernel` names another algorithm's kernel.**
-  Forcing a kernel fixes the algorithm, but the kernel was looked up after
-  `--message-bytes` and `--expect` had been validated against the default MD5.
-  `--kernel sha512/scalar-s1 --iterations 2` passed the digest-fits-message
-  guard and the oracle wrote a 64-byte digest into a 55-byte message; glibc
-  aborted. `--expect` was likewise parsed at MD5's width for a SHA-512 kernel.
-  The kernel is now resolved before either check.
+- **`verification.expected_source`** says whether the gate compared against a
+  value the scalar reference computed in this run or one supplied with
+  `--expect`, computed earlier by the same reference. Also in the sweep CSV.
 
-- **A vacuous fingerprint on very short messages.** Only the first four bytes
-  of a message carry its index, so a one-byte message has 256 values and a
-  corpus of 1,536 repeats each six times. Repeated digests cancel under XOR:
-  `--message-bytes 1 --working-set-kb 96` reported checksum `000…0`, verified,
-  and a kernel returning zero would have passed. A corpus with more messages
-  than the length can make distinct is now a usage error. One-byte messages
-  can no longer be run at all, since the smallest corpus is 768 messages.
+- **`--list --json` publishes every range the binary enforces.** `limits` gains
+  `working_set_kb_max`, `time_ms_min`, `time_ms_max`, `warmup_ms_max` and
+  `pipeline_chunks_max`, which the parser always enforced but never reported.
+  `--help` prints the same ranges from the same constants, and `sweep.py`
+  checks a grid against them before it runs.
 
-- **The OpenCL partial buffer could be overrun on small work-groups.** It was
-  sized for work-groups of at least 64, but a kernel the device caps below 64
-  is tuned down to 32 or less, and each group writes one partial. Sized now
-  from the smallest group the tuner will pick for that kernel, and a launch
-  with more groups than the buffer holds is refused rather than run.
+### Changed
 
-- **The default thread count oversubscribed restricted CPU sets.** It was
-  the online CPU count, so under `taskset -c 0,1` on a 32-CPU machine a
-  default run put 32 workers on two CPUs and reported `threads_used` 32. It is
-  now the number of CPUs the process is allowed on, in the binary and in
-  `sweep.py`.
+- **Exit 4, "could not run".** A valid command this machine could not run used
+  to exit 2, "usage error", so a script could not tell a wrong command from a
+  machine that lacks something. It now exits 4: a `--kernel` needing an
+  instruction set or device the machine lacks (or a vector length it does not
+  have), autotune finding nothing that could run, a `--device` past the
+  machine's last device, a corpus that could not be allocated, worker threads
+  that would not all start, a device that could not be set up, and a reference
+  ladder out of memory. The test is whether the same command would succeed on
+  another machine; a command that would fail anywhere stays 2, including one
+  that is both contradictory and impossible here. The capabilities document
+  gains `"cannot_run": 4`, and `sweep.py` records such a point as "could not
+  run" and carries on.
+
+- **Hashes per joule divides by the hardware that hashed, and the result schema
+  is `/2`.** It divided by every energy counter in the machine, so a GPU run
+  carried every other card's idle draw and the host's, and a CPU run on a
+  machine whose package counter was unreadable was divided by an idle GPU. Now
+  a device run counts the cards it used, matched to the counters by PCI
+  address, a CPU run the CPU package and DRAM, and a run where an OpenCL device
+  is the CPU both. The whole-machine figure is kept as
+  `hashes_per_joule_machine` -- what `hashes_per_joule` meant before -- and each
+  energy source says whether it was counted. When nothing that hashed was
+  measured the efficiency is reported as unmeasured. A field that changes
+  meaning moves the schema version, so results are `valubench/result/2`. The
+  sweep CSV gains `hashing_watts`, `hashes_per_joule` and
+  `hashes_per_joule_machine`; it carried no energy before.
+
+- **Streaming uploads read pinned host memory by default.** Every transfer
+  figure until now came from pageable memory, which the driver stages through
+  a bounce buffer; a real offload would use page-locked memory the copy engine
+  reads directly. `--transfer stream` now copies the corpus into a mapped,
+  driver-allocated buffer at setup and uploads from that, so streaming link
+  rates and every N\* and break-even figure derived from them rise. `--host-memory
+  pageable` reproduces the old behaviour, and the JSON and the sweep CSV record
+  which one a run used (`host_memory`). A platform that cannot map such a buffer
+  falls back to pageable and says so there.
+
+- **`sweep.py` and `compare.py` exit 2 on a wrong command**, the binary's usage
+  status, where they exited 1 -- each one's status for a failed point or a
+  regression. `sweep.py`'s statuses are in its `--help`.
+
+- **Device kernels are one core per hash, in no particular API's language.**
+  `src/kernels/gpu/<alg>_device_impl.h` replaces each `.cl` file, and a program
+  is composed at run time from a dialect header, `device_primitives.h` and the
+  core, so a second API compiles the same text. How rotate, Ch and Maj become
+  instructions is decided per device vendor in one table; on NVIDIA only the
+  32-bit rotate is steered, to a PTX funnel shift, because NVIDIA's OpenCL
+  compiler misses most of SHA-1's rotates written plainly. On NVIDIA, OpenCL's
+  SHA-1 and SHA-512 compile to the same instruction count as before or a few
+  fewer, and MD5's hash loop is unchanged; its work-group reduction takes
+  eight more instructions per work-item, once per launch.
+
+- **Devices are listed once, whichever APIs reach them, and share one device
+  layer.** `--list-devices` shows each physical device with its PCI address and
+  a line per API, and the JSON gains `backends` and `devices` beside the
+  unchanged `opencl` object; `--device` indices follow the same list, which
+  keeps OpenCL's order. Program composition, launch geometry, repeat
+  calibration, the partial fold and the multi-device split moved out of the
+  OpenCL backend into `src/device/`, so a second API is a second backend and
+  nothing else.
+
+- **`tools/run.sh` is now `tools/capture.sh`**, named for what it makes. A
+  `run.sh` that forwards to it, with a note, stays for one release.
+
+- **Captures no longer record the host's name.** `environment.txt` held
+  `uname -a`, node name included; it now holds `uname -srvm`.
+
+- **The sweep CSV's booleans read one way.** `smt_active` and `can_pin` read
+  `True`/`False`, Python's spelling, where `stable` and `verified` read
+  `true`/`false`; all four now share the lowercase one, and a null is empty.
+  Captures already written keep the capitals; `ingest.py` reads either.
 
 ## 0.7.0 — 2026-09-09
 
