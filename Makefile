@@ -280,12 +280,32 @@ CORE_OBJS := $(REF_OBJS) \
              $(BUILD)/registry.o $(BUILD)/power.o $(KERNEL_OBJS) $(OCL_OBJS) \
              $(CUDA_OBJS) $(DEV_OBJS)
 
+# ---- what the build was made with ---------------------------------------
+#
+# Objects did not depend on the compiler or the flags, so `make CC=clang` over a
+# gcc build relinked the gcc objects and called the binary clang's -- on a
+# benchmark where the compiler alone moves a kernel by tens of percent. The stamp
+# holds everything that decides what an object contains and is rewritten only
+# when that changes; every object depends on it through $(HDRS). Written at parse
+# time with $(file), which is why this Makefile needs make 4.3 -- and so a dry
+# run with other flags rewrites it too, costing the next build one needless
+# rebuild, never a stale one.
+CONFIG_STAMP := $(BUILD)/config.stamp
+CONFIG := CC=$(CC) [$(shell $(CC) --version 2>/dev/null | head -1)] \
+          CFLAGS=$(CFLAGS) KERNEL_DEFS=$(KERNEL_DEFS) \
+          $(foreach k,$(KERNELS),KFLAGS_$(k)=$(KFLAGS_$(k))) \
+          LDFLAGS=$(LDFLAGS) LDLIBS=$(LDLIBS) HOSTCC=$(HOSTCC)
+ifneq ($(file < $(CONFIG_STAMP)),$(strip $(CONFIG)))
+  $(file > $(CONFIG_STAMP),$(strip $(CONFIG)))
+endif
+
 HDRS := include/hashes.h include/sha512_const.h \
         include/algorithm.h include/valubench.h \
         include/bench.h include/sysinfo.h include/report.h \
         include/cpu_features.h include/vb_cl.h include/opencl.h \
         include/power.h include/device_steer.h include/device.h \
-        include/vb_cuda.h include/cuda_loader.h include/cuda_ptx.h
+        include/vb_cuda.h include/cuda_loader.h include/cuda_ptx.h \
+        $(CONFIG_STAMP)
 # Every kernel translation unit depends on the whole template set and on the
 # matrix, so any of them changing rebuilds all of them.
 KHDRS := $(wildcard src/kernels/cpu/*.h)
