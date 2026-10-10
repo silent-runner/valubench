@@ -42,6 +42,11 @@
  *     (sched_getaffinity). vb_self_cpu_mask returns -1 where the notion does
  *     not exist, and the caller falls back to the online set exactly as it
  *     already does when the read fails.
+ *
+ *   - Saving and restoring the calling thread's whole mask, for the one
+ *     thread a pool pins that outlives the pool: worker 0 is the caller.
+ *     Where there is no affinity API nothing was narrowed, so there is
+ *     nothing to save and the restore is a no-op.
  */
 
 #ifndef VALUBENCH_VB_THREADS_H
@@ -97,6 +102,21 @@ static inline int vb_self_cpu_mask(int *out, unsigned max)
         if (CPU_ISSET(cpu, &set))
             out[n++] = (int) cpu;
     return (int) n;
+}
+
+typedef cpu_set_t vb_cpu_mask;
+
+/* 0 saved, -1 the mask could not be read. */
+static inline int vb_thread_save_mask(vb_cpu_mask *m)
+{
+    return pthread_getaffinity_np(pthread_self(), sizeof *m, m) == 0 ? 0 : -1;
+}
+
+/* 0 restored, -1 refused -- a cpuset that shrank during the run can refuse
+   the mask it started with. */
+static inline int vb_thread_restore_mask(const vb_cpu_mask *m)
+{
+    return pthread_setaffinity_np(pthread_self(), sizeof *m, m) == 0 ? 0 : -1;
 }
 
 #else  /* no POSIX barriers, no affinity API: macOS and anything else */
@@ -164,6 +184,16 @@ static inline int vb_self_cpu_mask(int *out, unsigned max)
     (void) out;
     (void) max;
     return -1;
+}
+
+typedef struct { char unused; } vb_cpu_mask;
+
+static inline int vb_thread_save_mask(vb_cpu_mask *m) { (void) m; return -1; }
+
+static inline int vb_thread_restore_mask(const vb_cpu_mask *m)
+{
+    (void) m;
+    return 0;
 }
 
 #endif

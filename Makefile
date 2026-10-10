@@ -334,7 +334,7 @@ KHDRS := $(wildcard src/kernels/cpu/*.h)
 .DEFAULT_GOAL := all
 
 .PHONY: all test check check-kernels check-nvrtc check-device-layer \
-        check-pipeline clean config need-python3
+        check-pipeline check-affinity clean config need-python3
 
 # Three checks read the binary's JSON with python3. Without it they used to
 # fail as if the binary were at fault -- check-pinning reported "no pinned_cpus
@@ -629,6 +629,14 @@ print(e["threads_used"], e["pinned_cpus"], int(e.get("can_pin", True)))' 2>/dev/
 	   fi; \
 	 fi
 
+# A pool pins its caller as worker 0; the caller's mask must be whole again
+# once the pool is gone, or every thread it starts later shares one CPU.
+$(BUILD)/test_affinity: tests/test_affinity.c $(CORE_OBJS) $(HDRS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_affinity.c $(CORE_OBJS) $(LDLIBS)
+
+check-affinity: $(BUILD)/test_affinity
+	@$(BUILD)/test_affinity
+
 check-contract: need-python3 $(BUILD)/valubench
 	@sh tests/check_output_contract.sh $(BUILD)/valubench .
 
@@ -714,7 +722,7 @@ check-working-set: $(BUILD)/valubench
 
 check: test check-kernels check-scalar check-checkpoints check-threadfail \
        check-power check-device-layer check-pipeline \
-       check-pinning \
+       check-pinning check-affinity \
        check-virt \
        check-config \
        check-working-set \

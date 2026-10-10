@@ -155,6 +155,10 @@ unsigned vb_online_cpus(void)
  * worker to that single CPU: eight "threads" contending for one core, no
  * pin failure reported because CPU 0 always accepted the request. The cache
  * captures the mask before the first pin can touch it.
+ *
+ * pool_destroy() now puts the caller's mask back, so the narrowing no longer
+ * outlives a pool. The cache stays: a call made while a pool is alive would
+ * still see one CPU, and the answer should not depend on when it is asked.
  */
 unsigned vb_allowed_cpus(int *out, unsigned max)
 {
@@ -288,6 +292,19 @@ struct vb_pool {
        run that could not pin is not the run that was asked for. */
     int               pin_failed;
     unsigned          pinned_cpus;   /* distinct CPUs the workers were pinned to */
+
+    /*
+     * The calling thread's mask before worker 0 pinned it, put back when the
+     * pool goes.
+     *
+     * Worker 0 is the caller, so the pin outlives the pool, and Linux threads
+     * inherit their creator's mask. Left narrowed, every thread the caller
+     * started afterwards ran on one CPU: the parallel reference behind a
+     * device kernel that autotune reached after its CPU probes, and any
+     * driver threads a device context starts.
+     */
+    vb_cpu_mask       caller_mask;
+    int               have_caller_mask;
     vb_barrier        start_bar;
     vb_barrier        done_bar;
 };
@@ -377,6 +394,18 @@ static void *worker_main(void *arg)
     return NULL;
 }
 
+static void restore_caller(vb_pool *p)
+{
+    /* Said rather than swallowed: a failed restore is the original bug back,
+       one CPU for every thread started afterwards, with nothing in the
+       result to show it. */
+    if (p->have_caller_mask && vb_thread_restore_mask(&p->caller_mask) != 0)
+        fprintf(stderr, "valubench: could not restore the calling thread's "
+                        "CPU mask; threads started from here on share one "
+                        "CPU\n");
+    p->have_caller_mask = 0;
+}
+
 static void pool_destroy(vb_pool *p)
 {
     if (!p->w)
@@ -394,6 +423,7 @@ static void pool_destroy(vb_pool *p)
     pthread_mutex_destroy(&p->gate_m);
     free(p->w);
     p->w = NULL;
+    restore_caller(p);
 }
 
 /*
@@ -493,6 +523,8 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
     vb_barrier_init(&p->start_bar, threads);
     vb_barrier_init(&p->done_bar, threads);
 
+    if (p->w[0].cpu >= 0)
+        p->have_caller_mask = vb_thread_save_mask(&p->caller_mask) == 0;
     if (pin_self(p->w[0].cpu) != 0)
         p->pin_failed = 1;
 
@@ -535,6 +567,7 @@ static int pool_create(vb_pool *p, const vb_kernel *k, const vb_config *cfg,
         pthread_mutex_destroy(&p->gate_m);
         free(p->w);
         p->w = NULL;
+        restore_caller(p);
         fprintf(stderr, "valubench: could not start %u threads; refusing to "
                         "measure a partial pool. Try a smaller --threads.\n",
                 threads);
