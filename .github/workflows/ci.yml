@@ -56,19 +56,22 @@ jobs:
           ./build/valubench --list
           ./build/valubench --list --json | python3 -m json.tool > /dev/null
 
-      # `make check` runs check-pinning too, but it skips itself on a
-      # single-CPU machine -- correct for a developer's box and useless here.
-      # Assert the runner can actually test it, so a change to the hosted
-      # runner cannot turn this into a check that passes without checking.
+      # `make check` runs check-pinning and check-affinity too, but both skip
+      # themselves on a single-CPU machine -- correct for a developer's box
+      # and useless here. Assert the runner can actually test them, so a
+      # change to the hosted runner cannot turn either into a check that
+      # passes without checking.
       # That failure mode has already happened once in this project, when the
       # scalar-purity guard reported success while inspecting zero kernels.
-      - name: the pinning check must not be vacuous here
+      - name: the pinning checks must not be vacuous here
         run: |
           n=$(nproc)
           echo "runner cpus: $n"
           test "$n" -ge 2 || { echo "FAIL: runner has $n cpu; check-pinning cannot run"; exit 1; }
           make check-pinning | tee /tmp/pin.log
           grep -q '^  ok    pinning' /tmp/pin.log || { echo "FAIL: check-pinning did not report ok"; exit 1; }
+          make check-affinity | tee /tmp/aff.log
+          grep -q '^  ok    affinity' /tmp/aff.log || { echo "FAIL: check-affinity did not report ok"; exit 1; }
 
   # The ARM kernels are written and maintained on x86 machines, so without this
   # job they would only be exercised when someone remembered to. Throughput
