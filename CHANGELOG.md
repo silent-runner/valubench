@@ -3,6 +3,36 @@
 Notable changes. Measured figures are not recorded here; they are tracked
 outside this repository while a durable format for them is decided.
 
+## Unreleased
+
+### Added
+
+- **`capture.sh` phase D6: overlapped streaming.** D1's crossover again with
+  `--transfer overlap`, beside a resident sweep at the same parameters, and a
+  table of the overlapped rate against its prediction (the smaller of the link
+  rate and the resident rate) and against the CPU.
+
+### Fixed
+
+- **A worker pool left its caller pinned to one CPU.** Worker 0 is the
+  calling thread, and its pin outlived the pool, so every thread started
+  afterwards inherited one CPU. The worst case was a plain autotuned run that
+  reached a device kernel after the CPU probes: its reference checksum, meant
+  to use every core, ran on one. That cost wall time outside the timed
+  region; such runs are now several times faster end to end. One measured
+  difference follows on hosts with more than one NUMA node: a corpus built
+  after the first pool used to be first-touched from the pinned CPU's node,
+  and is now placed as the first one always was, so later autotune probes
+  can see different page placement than before.
+- **D1 ranked its CPU baseline kernels at one iteration.** `capture.sh`
+  picks the CPU kernel for break-even with one short autotune at 8 MiB and a
+  single iteration. That stays in cache and is mostly compute, but it could
+  swap near-ties, and at a larger corpus one iteration ranks memory rather
+  than compute. It now probes at 64 iterations, where the kernels are
+  compute-bound and their ranking is the one the break-even slope depends on.
+  On the 9950X the old probe's picks ran within a few percent of the
+  compute-bound winner, so earlier captures there are not badly off.
+
 ## 0.8.0 — 2026-10-01
 
 A CUDA backend beside OpenCL, an overlapped streaming mode that measures the
