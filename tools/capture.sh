@@ -63,6 +63,13 @@
 #       the device path exists to answer: how much work an upload has to buy
 #       before the accelerator is worth its bus. Solved by fit, not bracketed.
 #
+#   D6  D1 again with each upload overlapped with the previous pass's kernel,
+#       beside a resident sweep at the same parameters. The overlapped rate
+#       should be the smaller of the link rate and the resident rate; a card
+#       that falls short of the resident rate, or a resident rate below D1's
+#       sequential kernel, is the finding. Runs straight after D1, whose CPU
+#       rows and upload time it reuses.
+#
 #   D2  Every algorithm at every device stream count, resident. Whether "one
 #       stream is right on a device" is a property of devices or of the one
 #       device it was first measured on.
@@ -883,13 +890,27 @@ if [ "$NDEV" -gt 0 ]; then
         # "when does offload beat the machine I already own".
         #
         # The best CPU kernel is found once rather than autotuned per point:
-        # probing thirteen kernels at every rung of the ladder would cost more
-        # than the ladder does, and the winner does not move with N. --where cpu
-        # is what makes that probe a CPU answer on a box whose device kernel
-        # would otherwise win it.
+        # probing every kernel at every rung of the ladder would cost more
+        # than the ladder does. --where cpu is what makes that probe a CPU
+        # answer on a box whose device kernel would otherwise win it.
+        #
+        # It probes at 64 iterations, where every CPU kernel is compute-bound
+        # and the ranking is the one the break-even slope depends on. It used
+        # to probe at one iteration, which worked only because 8 MiB is small
+        # enough to stay in cache: there one iteration is mostly compute, and
+        # the probe picked close to the best kernel, though it could still
+        # swap near-ties (SHA-512's s1 and s2). Moved to D1's own 256 MiB, one
+        # iteration ranks memory instead. The kernels nearly tie, and on a
+        # 9950X (gcc 16.2.1, 2026-10-10) the probe picked avx2-s1, several
+        # times slower than the best kernel once compute binds, and the MD5
+        # break-even fell to a third. At 64 iterations the corpus size stops
+        # mattering -- 8 MiB picked the same kernel as 256 MiB for all three
+        # algorithms -- so the probe stays at 8 MiB, in seconds where 256 MiB
+        # took minutes.
         #
         CPUK=$("$BIN" --algorithm "$alg" --where cpu --json \
                    --message-bytes "$XMSG" --working-set-kb 8192 \
+                   --iterations 64 \
                    --samples 3 --time-ms 40 --warmup-ms 100 2>/dev/null \
                | python3 -c 'import json,sys
 try:
@@ -991,6 +1012,187 @@ if cpu_rows:
             print("      *** %s ***" % w)
 else:
     print("      (no CPU rows -- break-even not computed)")
+PY
+        fi
+    done
+fi
+
+# ---------------------------- D6: overlapped streaming, against its prediction
+
+if [ "$NDEV" -gt 0 ]; then
+    say "D6  overlapped streaming  (D1 with each upload behind a kernel)"
+    note "each pass uploads on a second queue while the pass before it hashes."
+    note "predicted: the smaller of the link rate (D1's upload time) and the"
+    note "resident rate, swept here at the same parameters. Past the knee"
+    note "overlap should track resident, not D1's sequential kernel."
+    #
+    # Why the resident rate and not D1's kernel time: kept busy through the
+    # uploads, a card runs its kernel at the speed it holds when never idle,
+    # and a power-capped card holds less than the sequential kernel gets while
+    # it rests during each upload. On a 70 W RTX PRO 2000 (NVIDIA OpenCL,
+    # driver 610.57, 2026-09-26) the sequential prediction overstated the
+    # overlapped rate by 3-12% past the knee; the resident one held to about
+    # 1% at the median. The resident rows are what tell those apart on a new
+    # card.
+    #
+    # The full ladder stops at 128, as D5's does: past the knee the overlapped
+    # and resident curves converge, and the higher rungs only cost time. The
+    # quick one is D1's own. Either way it is a subset of D1's, because the
+    # comparison with the CPU below reuses D1's CPU rows rather than
+    # measuring them again.
+    if [ "$QUICK" = 1 ]; then
+        OV_ITERS="1:6:+1,16,64"
+    else
+        OV_ITERS="1:8:+1,16:128:*2"
+    fi
+    for alg in md5 sha1 sha512; do
+        $SW --algorithm "$alg" --kernel "$alg/ocl-s1" \
+            --transfer overlap,resident \
+            --message-bytes "$XMSG" \
+            --working-set-kb "$XFER_WS" --iterations "$OV_ITERS" \
+            --csv "$OUT/d6-overlap-$alg.csv" >> "$LOG" 2>&1
+        if [ -s "$OUT/d6-overlap-$alg.csv" ]; then
+            note "$alg:"
+            python3 - "$OUT/d6-overlap-$alg.csv" "$OUT/d1-crossover-$alg.csv" \
+                      "$REPO" <<'PY' | show
+import csv, os, statistics, sys
+sys.path.insert(0, sys.argv[3] + "/tools")
+from sweep import balance_point
+
+def rows(path):
+    if not os.path.exists(path):
+        return []
+    return [r for r in csv.DictReader(open(path))
+            if r.get("verified") == "true"]
+
+def num(r, f):
+    try:
+        v = float(r[f])
+    except (ValueError, KeyError, TypeError):
+        return None
+    return v if v > 0 else None
+
+def by_n(rs):
+    out = {}
+    for r in rs:
+        n, hps = num(r, "iterations"), num(r, "hashes_per_sec")
+        if n and hps and hps > out.get(int(n), (0, None))[0]:
+            out[int(n)] = (hps, r)
+    return out
+
+def device(rs, mode):
+    return [r for r in rs if r.get("runs_on") == "device"
+            and r.get("transfer_mode") == mode]
+
+d6 = rows(sys.argv[1])
+d1 = rows(sys.argv[2])
+ovl, res = by_n(device(d6, "overlap")), by_n(device(d6, "resident"))
+seq = by_n(device(d1, "stream"))
+cpu = by_n([r for r in d1 if r.get("runs_on") == "cpu"])
+
+# The link side of the prediction: D1's upload time, the same bytes at every
+# rung. Without D1, fall back to the overlapped run's own upload time and say
+# so -- uploads contend with the kernel there, so it is the weaker estimate.
+# Whatever is missing is said, and the rest of the report still runs: the
+# measured rates are worth printing without a prediction to compare them to.
+if not ovl:
+    print("      (no verified overlapped rows -- nothing to report)")
+    raise SystemExit
+ups = [num(r, "transfer_ns_per_pass") for r in device(d1, "stream")]
+src = "D1's sequential upload"
+if not any(ups):
+    ups = [num(r, "transfer_ns_per_pass") for r in device(d6, "overlap")]
+    src = "the overlapped run's own upload (no D1 timings)"
+ups = [u for u in ups if u]
+upload_ns = statistics.median(ups) if ups else None
+
+def mhs(v):
+    return "%9.2f" % (v / 1e6) if v else "%9s" % "-"
+
+print("      %5s %9s %9s %9s %9s %8s %7s  %s" % (
+    "iters", "seq MH/s", "ovl MH/s", "res MH/s", "predicted", "ovl/pred",
+    "ovl/cpu", "throttle"))
+ratios, wins = [], []
+for n in sorted(ovl):
+    o, orow = ovl[n]
+    m = num(orow, "batch_messages")
+    link = m / upload_ns * 1e9 if m and upload_ns else None
+    r = res.get(n, (None,))[0]
+    pred = min(link, r) if link and r else None
+    ratio = o / pred if pred else None
+    if ratio:
+        ratios.append(ratio)
+    c = cpu.get(n, (None,))[0]
+    if c:
+        wins.append((n, o / c))
+    print("      %5d %s %s %s %s %8s %7s  %s%s" % (
+        n, mhs(seq.get(n, (None,))[0]), mhs(o), mhs(r), mhs(pred),
+        "%.3f" % ratio if ratio else "-",
+        "%.2f" % (o / c) if c else "-",
+        orow.get("gpu_throttle") or "-",
+        "   *" if ratio and abs(ratio - 1) > 0.05 else ""))
+
+print("      %s" % ("-" * 66))
+if upload_ns:
+    print("      link: %.3f ms per pass, from %s" % (upload_ns / 1e6, src))
+else:
+    print("      (no upload timings in D1 or here -- no link rate, "
+          "no prediction)")
+if not res:
+    print("      (no verified resident rows -- no prediction)")
+if ratios:
+    print("      overlapped / predicted: median %.3f, range %.3f-%.3f over %d"
+          " rungs%s" % (statistics.median(ratios), min(ratios), max(ratios),
+                        len(ratios),
+                        "   (* = more than 5% off)" if any(
+                            abs(x - 1) > 0.05 for x in ratios) else ""))
+
+# Where the overlapped kernel overtakes the upload, from its own kernel times.
+fit = balance_point([orow for _, orow in ovl.values()])
+if fit:
+    print("      knee N* = %.2f iterations overlapped (fit r2 %.4f)%s"
+          % (fit["n_star"], fit["r2"],
+             "   *** nonlinear -- do not quote ***" if fit["r2"] < 0.98
+             else ""))
+
+# Against the whole CPU, rung by rung. Not solved the way D1's break-even is:
+# below the knee the overlapped time per hash is the upload, flat in N, so the
+# straight line that fit assumes does not hold.
+#
+# Within 5% counts as level. Below a few iterations the CPU can be bound by
+# its own memory at a rate close to the link's: on a 9950X (gcc 16.2.1) with
+# a PCIe 5.0 x16 card, both sat near 400 MH/s for MD5 on 2026-10-10, and a
+# strict comparison named a winner from differences inside the run-to-run
+# noise. Every rung lands in one of the three bands, so the CPU's wins are
+# named as plainly as the device's.
+if wins:
+    k = cpu[wins[0][0]][1]
+    vs = "(vs %s on %s threads)" % (k["kernel"], k["threads"])
+    rungs = lambda sel: ",".join(str(n) for n, x in wins if sel(x))
+    ahead, level, behind = (rungs(lambda x: x > 1.05),
+                            rungs(lambda x: 0.95 <= x <= 1.05),
+                            rungs(lambda x: x < 0.95))
+    first = next((n for i, (n, _) in enumerate(wins)
+                  if all(x > 1.05 for _, x in wins[i:])), None)
+    if first == wins[0][0]:
+        print("      vs CPU: overlapped offload is ahead at every rung %s" % vs)
+    elif first is not None:
+        print("      vs CPU: overlapped offload is ahead from %d iterations"
+              " up %s" % (first, vs))
+    elif not ahead and not level:
+        print("      vs CPU: the CPU is ahead at every rung %s" % vs)
+    else:
+        print("      vs CPU: overlapped offload is not clearly ahead at the"
+              " top rung %s" % vs)
+    # The bands, unless the headline already covers every rung.
+    if first != wins[0][0] and (ahead or level):
+        for label, ns in (("offload ahead by more than 5%", ahead),
+                          ("level, within 5%", level),
+                          ("CPU ahead by more than 5%", behind)):
+            if ns:
+                print("        %-30s at %s iterations" % (label, ns))
+else:
+    print("      (no D1 CPU rows at these rungs -- CPU comparison skipped)")
 PY
         fi
     done
