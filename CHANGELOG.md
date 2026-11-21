@@ -14,6 +14,11 @@ outside this repository while a durable format for them is decided.
 
 ### Fixed
 
+- **`idiom_probe.py --kernels` failed on every kernel.** It composed each
+  kernel without `device_capacity.h`, which every algorithm core has needed
+  since the capacity probe was added, so all twelve stopped at an undefined
+  macro and the in-context figures the steer table relies on could not be
+  regenerated.
 - **A worker pool left its caller pinned to one CPU.** Worker 0 is the
   calling thread, and its pin outlived the pool, so every thread started
   afterwards inherited one CPU. The worst case was a plain autotuned run that

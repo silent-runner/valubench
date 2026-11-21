@@ -289,7 +289,8 @@ def kernel_rows(tool, target, dialect, build, spellings_ok):
     rows = []
     for alg in ("md5", "sha1", "sha512"):
         core = open(os.path.join(GPU, "%s_device_impl.h" % alg)).read()
-        src = dialect + open(os.path.join(GPU, "device_primitives.h")).read() + core
+        src = (dialect + open(os.path.join(GPU, "device_primitives.h")).read() +
+               open(os.path.join(GPU, "device_capacity.h")).read() + core)
         for streams in (1, 2, 3, 4):
             base = ["-DLANES=64", "-DSTREAMS=%d" % streams]
             try:
