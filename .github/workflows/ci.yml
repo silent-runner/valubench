@@ -78,8 +78,14 @@ jobs:
   # under emulation is meaningless and nothing here records it -- but the
   # verification checksum is invariant across architectures, so `make check`
   # passing under qemu means NEON computes the same digests as x86.
+  #
+  # Pinned to 24.04, not ubuntu-latest: the 26.04 image dropped the
+  # qemu-user-static package, and the steps below call qemu-aarch64-static by
+  # name to pick a CPU model. Moving off the pin means switching to 26.04's
+  # qemu-user and checking that its binary and binfmt registration still let
+  # `make check` run AArch64 binaries directly.
   cross-aarch64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: aarch64 (cross, emulated)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
